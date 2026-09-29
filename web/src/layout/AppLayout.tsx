@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet, useNavigate, useParams } from "react-router-dom";
-import { Boxes, Cloud, LayoutDashboard, LogOut, Menu, Package, Radio, Settings, X } from "lucide-react";
+import { Boxes, Cloud, LayoutDashboard, Layers, Rocket, LogOut, Menu, Package, Radio, Settings, X } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { useLogout } from "../api/hooks";
 import { OrgEventsProvider, useLiveEvents } from "../hooks/useOrgEvents";
@@ -14,8 +14,10 @@ import { cn } from "../lib/cn";
 
 const nav = [
   { to: "", label: "Resumen", icon: LayoutDashboard, end: true },
+  { to: "empezar", label: "Empezar", icon: Rocket, end: false },
   { to: "apps", label: "Aplicaciones", icon: Package, end: false },
   { to: "clusters", label: "Clusters", icon: Boxes, end: false },
+  { to: "infra", label: "Infraestructura", icon: Layers, end: false },
   { to: "cloud-accounts", label: "Cuentas de nube", icon: Cloud, end: false },
   { to: "settings", label: "Configuración", icon: Settings, end: false },
 ];

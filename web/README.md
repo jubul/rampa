@@ -39,10 +39,16 @@ Para producción, `dist/` se sirve desde la API con `RAMPA_WEB_DIR=web/dist` (fa
 | `/orgs/new` | Alta de organización (slug derivado del nombre, validado con la regex de la API). |
 | `/o/:org` | Resumen: clusters con estado, últimos deployments (el actual de cada scope), actividad en vivo. |
 | `/o/:org/cloud-accounts` | Lista de cuentas y asistente de conexión en tres pasos: proveedor (los no disponibles salen como "Próximamente"), instrucciones con link o comando y campos a completar (PATCH), verificación con resultado. |
-| `/o/:org/clusters` | Lista con estado online/offline, versión de agente y de Kubernetes. Crear cluster muestra el token y el `install_command` una sola vez, con copiar y advertencia. Rotar token y borrar. |
+| `/o/:org/clusters` | Lista con estado online/offline, versión de agente y de Kubernetes. Crear cluster con un click lleva a `/infra/new-cluster`; los clusters creados por Rampa enlazan a su run. Registrar cluster existente muestra el token y el `install_command` una sola vez, con copiar y advertencia. Rotar token y borrar. |
 | `/o/:org/apps` | Catálogo. Importar pegando el `rampa.yaml` y la URL del repo; los `details` de validación se muestran en el formulario. |
-| `/o/:org/apps/:app` | Detalle: metadata, scopes con estado, URL, imagen actual y cluster; Desplegar (diálogo con imagen y confirmación), Atar cluster si está sin atar, Eliminar scope; historial de deployments con Aprobar/Cancelar cuando corresponde; timeline de eventos en vivo filtrado por la app; editar manifest; eliminar app. |
-| `/o/:org/settings` | Datos de la org, miembros (agregar por email con rol, cambiar rol, quitar) y tokens de API (crear mostrando el secreto una sola vez, borrar). |
+| `/o/:org/empezar` | Onboarding: los cinco pasos de `GET /onboarding` como checklist, cada uno con el botón que lleva a hacerlo (conectar nube, crear o registrar cluster, instalar agente, crear app, primer deploy). Se refresca con eventos SSE. El resumen muestra la tarjeta "Te faltan N pasos" mientras no esté completo. |
+| `/o/:org/apps/new` | Wizard de aplicación sin YAML: Básicos, Scopes, Parameters, Services y Revisión (preview con debounce contra `POST /apps/preview`, YAML de solo lectura, errores por paso). Crear hace `POST /apps/from-spec`. |
+| `/o/:org/apps/:app/edit` | El mismo wizard precargado con `GET /apps/{app}/spec`, nombre bloqueado, guarda con `PUT /apps/{app}/spec`. |
+| `/o/:org/infra` | Ejecuciones de infraestructura (runs) con estado, nombre, módulo, cuenta, quién y cuándo. |
+| `/o/:org/infra/new-cluster` | Formulario armado desde `GET /infra/modules` (módulos disponibles y "Próximamente"), aviso de costo y de tiempo, se deshabilita si `runner_ready` es false. Envía `POST /infra/clusters` y navega al run. |
+| `/o/:org/infra/runs/:id` | Cabecera, log en vivo (SSE `?stream=1`) con autoscroll y pausa, outputs y enlace al cluster al terminar, error, Reintentar y Destruir (con confirmación escribiendo el nombre) si falló. |
+| `/o/:org/apps/:app` | Detalle: metadata, scopes con estado, URL, imagen actual y cluster; Desplegar (diálogo con imagen y confirmación), Atar cluster si está sin atar, Eliminar scope; historial de deployments con Aprobar/Cancelar cuando corresponde; timeline de eventos en vivo filtrado por la app; editar manifest; pestaña YAML de solo lectura; botón Editar (wizard); Descargar proyecto inicial (`scaffold.zip` con la organización de GitHub); eliminar app. |
+| `/o/:org/settings` | Datos de la org (incluida la organización de GitHub, `settings.github_org`), miembros (agregar por email con rol, cambiar rol, quitar) y tokens de API (crear mostrando el secreto una sola vez, borrar). |
 
 ## Estructura
 
@@ -61,7 +67,8 @@ src/
   pages/                 Una pantalla por ruta
   components/ui/         Button, Input, Textarea, Select, Field, Card, Badge, Dialog, Table, CopyField, States
   components/            StatusBadge, EventList
-  lib/                   format (fechas, imágenes), status (tonos y etiquetas), events (filtros), slug, cn
+  components/appwizard/  Wizard de aplicación (AppWizard y los pasos)
+  lib/                   format, status, events, slug, cn, spec (spec por defecto, validaciones, normalización), infra (estados de runs, parser del log, inputs de módulo)
 ```
 
 ## Decisiones
@@ -76,9 +83,17 @@ src/
 - **Eventos filtrados por app.** Los scopes no tienen id en la API, por lo que sus eventos se asocian a la app por `subject_id` (app o deployment conocido) o por `payload.app` / `payload.application_id`. Si el servidor no incluye el nombre de la app en el payload de eventos de scope, esos eventos no aparecen en la timeline de la app (sí en el resumen de la org).
 - **Dashboard sin endpoint global de deployments.** "Últimos deployments" se arma con el `current_deployment` de cada scope de cada app. Es N+1 pero acotado para la Fase A.
 
+## Sin YAML, infraestructura con clicks
+
+- **Un solo objeto `ApplicationSpec`** es el estado del wizard. Antes de enviar, `normalizeSpec` vacía lo que no aplica al tipo (puerto, healthcheck, schedule) o al origen del parameter, y descarta scopes inexistentes en `scopes` de parameters y services. Los errores de la API (`details`) se asignan a un paso por palabra clave (`stepForDetail`).
+- **Preview con debounce** (500 ms) sobre el spec normalizado; Crear se habilita solo con preview válido y sin cambios pendientes.
+- **Log de un run:** `openInfraLog` abre `EventSource` con `?stream=1`, escucha `line`, `status` y `done`, reintenta con backoff si el stream queda cerrado y no reabre después de `done`. Cada apertura reenvía lo guardado, así que el buffer se descarta al abrir.
+- **install_command:** la API solo lo entrega al crear o rotar el token. `InstallCommandPanel` rota el token a pedido (con advertencia) para poder mostrarlo.
+- **Enlaces profundos:** `/cloud-accounts?connect=1` abre el asistente y `/clusters?new=1` abre el registro de cluster existente.
+
 ## Fuera de alcance de la Fase A
 
-- Parámetros y secretos desde la web, logs en vivo, services (Fases B y C).
+- Cargar el valor de los secretos desde la web (el wizard solo declara el parameter).
 - Cambiar `settings.require_approval_prod` desde la web: no hay endpoint en `docs/api.md`.
 - Paginación de eventos con `before` (la UI muestra los últimos 100 más los que llegan en vivo).
 - Tests de componentes con DOM: los tests actuales cubren la lógica pura (cliente HTTP, SSE, filtros, formato).

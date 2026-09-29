@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
-import { ArrowRight, Boxes, Package, Rocket } from "lucide-react";
-import { useApps, useClusters, useEvents, useOrg, useScopesForApps } from "../api/hooks";
+import { ArrowRight, Boxes, ListChecks, Package, Rocket } from "lucide-react";
+import { useApps, useClusters, useEvents, useOnboarding, useOrg, useScopesForApps } from "../api/hooks";
 import { mergeEvents, useLiveEvents } from "../hooks/useOrgEvents";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Card, CardHeader } from "../components/ui/Card";
@@ -21,6 +21,7 @@ export function DashboardPage() {
   const appNames = (appsQ.data ?? []).map((a) => a.name);
   const scopesQ = useScopesForApps(org, appNames);
   const eventsQ = useEvents(org, { limit: 50 });
+  const onboardingQ = useOnboarding(org);
   const live = useLiveEvents();
 
   const recentDeployments: Deployment[] = scopesQ.data
@@ -41,6 +42,8 @@ export function DashboardPage() {
             : undefined
         }
       />
+
+      {onboardingQ.data && !onboardingQ.data.complete && <OnboardingCard org={org} missing={onboardingQ.data.steps.filter((s) => !s.done).length} nextTitle={onboardingQ.data.steps.find((s) => s.key === onboardingQ.data.next)?.title} />}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat icon={<Boxes className="size-4" />} label="Clusters en línea" value={clustersQ.data ? `${online} / ${clustersQ.data.length}` : "-"} to={`/o/${org}/clusters`} />
@@ -182,6 +185,26 @@ function Stat({ icon, label, value, to }: { icon: React.ReactNode; label: string
         {label}
       </div>
       <div className="mt-1.5 text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
+    </Link>
+  );
+}
+
+function OnboardingCard({ org, missing, nextTitle }: { org: string; missing: number; nextTitle?: string }) {
+  return (
+    <Link
+      to={`/o/${org}/empezar`}
+      className="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 hover:bg-amber-100"
+    >
+      <ListChecks className="size-5 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold">
+          Te {missing === 1 ? "falta 1 paso" : `faltan ${missing} pasos`}
+        </div>
+        <div className="truncate text-xs">{nextTitle ? `Siguiente: ${nextTitle}` : "Terminá de configurar tu plataforma."}</div>
+      </div>
+      <span className="inline-flex items-center gap-1 text-xs font-medium">
+        Empezar <ArrowRight className="size-3" />
+      </span>
     </Link>
   );
 }

@@ -1,12 +1,13 @@
 import { safeHttpUrl } from "../lib/url";
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ExternalLink, Package, Upload } from "lucide-react";
+import { ExternalLink, Package, Plus, Upload } from "lucide-react";
 import { useApps, useImportApp } from "../api/hooks";
 import { useOrgRole } from "../auth/AuthContext";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
+import { LinkButton } from "../components/ui/LinkButton";
 import { Input, Textarea } from "../components/ui/Input";
 import { Field } from "../components/ui/Field";
 import { Badge } from "../components/ui/Badge";
@@ -42,9 +43,14 @@ export function AppsPage() {
         title="Aplicaciones"
         description="El catálogo se deriva de los rampa.yaml importados."
         actions={
-          <Button onClick={() => setImportOpen(true)} disabled={!isDeveloper} title={isDeveloper ? undefined : "Necesitás rol developer"} icon={<Upload className="size-4" />}>
-            Importar aplicación
-          </Button>
+          <>
+            <Button variant="secondary" onClick={() => setImportOpen(true)} disabled={!isDeveloper} title={isDeveloper ? undefined : "Necesitás rol developer"} icon={<Upload className="size-4" />}>
+              Importar aplicación
+            </Button>
+            <LinkButton to={`/o/${org}/apps/new`} icon={<Plus className="size-4" />}>
+              Nueva aplicación
+            </LinkButton>
+          </>
         }
       />
 
@@ -57,11 +63,16 @@ export function AppsPage() {
           <EmptyState
             icon={<Package className="size-8" />}
             title="No hay aplicaciones"
-            description="Importá el rampa.yaml de un repositorio para sumarlo al catálogo."
+            description="Creala con el asistente, sin escribir YAML, o importá el rampa.yaml de un repositorio."
             action={
-              <Button onClick={() => setImportOpen(true)} disabled={!isDeveloper} icon={<Upload className="size-4" />}>
-                Importar aplicación
-              </Button>
+              <div className="flex gap-2">
+                <LinkButton to={`/o/${org}/apps/new`} icon={<Plus className="size-4" />}>
+                  Nueva aplicación
+                </LinkButton>
+                <Button variant="secondary" onClick={() => setImportOpen(true)} disabled={!isDeveloper} icon={<Upload className="size-4" />}>
+                  Importar aplicación
+                </Button>
+              </div>
             }
           />
         ) : (

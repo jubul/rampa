@@ -1,11 +1,15 @@
 // Hooks de TanStack Query por recurso. Las claves están centralizadas en
 // `keys` para poder invalidar desde las mutaciones y desde el stream SSE.
 
-import { useMutation, useQueries, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import * as api from "./client";
+import { isRunActive } from "../lib/infra";
 import type {
   AddMemberRequest,
   Application,
+  ApplicationSpec,
+  CreateInfraClusterRequest,
+  FromSpecRequest,
   CreateCloudAccountRequest,
   CreateClusterRequest,
   CreateDeploymentRequest,
@@ -36,6 +40,11 @@ export const keys = {
   deployments: (org: string, app: string, scope: string) =>
     ["org", org, "apps", app, "scopes", scope, "deployments"] as const,
   deployment: (org: string, id: string) => ["org", org, "deployments", id] as const,
+  appSpec: (org: string, app: string) => ["org", org, "apps", app, "spec"] as const,
+  onboarding: (org: string) => ["org", org, "onboarding"] as const,
+  infraModules: (org: string) => ["org", org, "infra", "modules"] as const,
+  infraRuns: (org: string) => ["org", org, "infra", "runs"] as const,
+  infraRun: (org: string, id: string) => ["org", org, "infra", "runs", id] as const,
   events: (org: string, filter: EventsFilter) => ["org", org, "events", filter] as const,
 };
 
@@ -407,4 +416,127 @@ export function useEvents(org: string, filter: EventsFilter = {}) {
     queryFn: ({ signal }) => api.events.list(org, filter, signal),
     select: (r) => r.items,
   });
+}
+
+// Applications sin YAML
+
+/** Preview del manifest a partir del spec. La clave es el spec serializado, así que cambia solo con el contenido. */
+export function useSpecPreview(org: string, spec: ApplicationSpec, enabled: boolean) {
+  return useQuery({
+    queryKey: ["org", org, "apps", "preview", spec] as const,
+    queryFn: ({ signal }) => api.apps.preview(org, spec, signal),
+    enabled,
+    retry: false,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useCreateFromSpec(org: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: FromSpecRequest) => api.apps.createFromSpec(org, body),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: keys.apps(org) }),
+        qc.invalidateQueries({ queryKey: keys.onboarding(org) }),
+      ]),
+  });
+}
+
+export function useAppSpec(org: string, app: string) {
+  return useQuery({
+    queryKey: keys.appSpec(org, app),
+    queryFn: ({ signal }) => api.apps.getSpec(org, app, signal),
+    enabled: app !== "",
+    // El wizard edita una copia local: no queremos que un refetch la pise.
+    staleTime: Infinity,
+    gcTime: 0,
+  });
+}
+
+export function useUpdateSpec(org: string, app: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (spec: ApplicationSpec) => api.apps.updateSpec(org, app, spec),
+    onSuccess: (updated: Application) => {
+      qc.setQueryData(keys.app(org, app), updated);
+      return Promise.all([
+        qc.invalidateQueries({ queryKey: keys.apps(org) }),
+        qc.invalidateQueries({ queryKey: keys.scopes(org, app) }),
+      ]);
+    },
+  });
+}
+
+// Onboarding
+
+export function useOnboarding(org: string) {
+  return useQuery({
+    queryKey: keys.onboarding(org),
+    queryFn: ({ signal }) => api.onboarding.get(org, signal),
+  });
+}
+
+// Infraestructura
+
+export function useInfraModules(org: string) {
+  return useQuery({
+    queryKey: keys.infraModules(org),
+    queryFn: ({ signal }) => api.infra.modules(org, signal),
+    retry: false,
+  });
+}
+
+export function useInfraRuns(org: string) {
+  return useQuery({
+    queryKey: keys.infraRuns(org),
+    queryFn: ({ signal }) => api.infra.runs(org, 50, signal),
+    select: (r) => r.items,
+    refetchInterval: (q) => (q.state.data?.items.some((r) => isRunActive(r.status)) ? 5000 : false),
+  });
+}
+
+export function useInfraRun(org: string, id: string) {
+  return useQuery({
+    queryKey: keys.infraRun(org, id),
+    queryFn: ({ signal }) => api.infra.run(org, id, signal),
+    enabled: id !== "",
+    refetchInterval: (q) => (q.state.data && isRunActive(q.state.data.status) ? 4000 : false),
+  });
+}
+
+export function useCreateInfraCluster(org: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateInfraClusterRequest) => api.infra.createCluster(org, body),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: keys.infraRuns(org) }),
+        qc.invalidateQueries({ queryKey: keys.clusters(org) }),
+        qc.invalidateQueries({ queryKey: keys.onboarding(org) }),
+      ]),
+  });
+}
+
+function useRunAction(org: string, fn: (org: string, id: string) => Promise<import("./types").InfraRun>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => fn(org, id),
+    onSuccess: (run) => {
+      qc.setQueryData(keys.infraRun(org, run.id), run);
+      return Promise.all([
+        qc.invalidateQueries({ queryKey: keys.infraRuns(org) }),
+        qc.invalidateQueries({ queryKey: keys.clusters(org) }),
+      ]);
+    },
+  });
+}
+
+export function useRetryInfraRun(org: string) {
+  return useRunAction(org, api.infra.retry);
+}
+
+export function useDestroyInfraRun(org: string) {
+  return useRunAction(org, api.infra.destroy);
 }

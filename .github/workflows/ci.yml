@@ -128,3 +128,32 @@ jobs:
       - uses: actions/checkout@v7
       - run: docker build -f cmd/rampa-api/Dockerfile -t rampa-api:ci .
       - run: docker build -f cmd/rampa-agent/Dockerfile -t rampa-agent:ci .
+
+  infra:
+    name: Infraestructura (OpenTofu, CloudFormation, workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.12.6
+      - name: tofu fmt y validate de cada módulo
+        run: |
+          set -e
+          for m in terraform/modules/*/*/; do
+            echo "== $m"
+            tofu -chdir="$m" fmt -check -diff
+            tofu -chdir="$m" init -backend=false -input=false >/dev/null
+            tofu -chdir="$m" validate
+          done
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: cfn-lint de las plantillas de CloudFormation
+        run: |
+          pip install --quiet cfn-lint
+          cfn-lint pkg/provider/aws/cloudformation/*.yaml
+      - name: actionlint de los workflows
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12 /usr/local/bin >/dev/null
+          actionlint -no-color -shellcheck= .github/workflows/*.yml

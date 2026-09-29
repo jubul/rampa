@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { CheckCircle2, Cloud, ExternalLink, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
 import {
   useCloudAccounts,
@@ -37,7 +37,8 @@ export function CloudAccountsPage() {
   const verify = useVerifyCloudAccount(org);
   const remove = useRemoveCloudAccount(org);
 
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [wizardOpen, setWizardOpen] = useState(searchParams.get("connect") === "1");
   const [resumeAccount, setResumeAccount] = useState<CloudAccount | null>(null);
   const [toDelete, setToDelete] = useState<CloudAccount | null>(null);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
@@ -148,13 +149,14 @@ export function CloudAccountsPage() {
 
       <ConnectWizard
         org={org}
-        open={wizardOpen || resumeAccount !== null}
+        open={(wizardOpen && !providersQ.isPending) || resumeAccount !== null}
         providers={providersQ.data ?? []}
         providersError={providersQ.isError ? providersQ.error : null}
         initialAccount={resumeAccount}
         onClose={() => {
           setWizardOpen(false);
           setResumeAccount(null);
+          if (searchParams.has("connect")) setSearchParams({}, { replace: true });
         }}
       />
 

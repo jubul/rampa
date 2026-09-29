@@ -68,10 +68,12 @@ type Scope struct {
 	TTL         string       `yaml:"ttl,omitempty"`
 }
 
+// Autoscaling lleva tags json además de yaml porque viaja tal cual dentro de
+// ApplicationSpec (spec.go), el formato estructurado que usa la web.
 type Autoscaling struct {
-	Min int `yaml:"min"`
-	Max int `yaml:"max"`
-	CPU int `yaml:"cpu"`
+	Min int `yaml:"min" json:"min"`
+	Max int `yaml:"max" json:"max"`
+	CPU int `yaml:"cpu" json:"cpu"`
 }
 
 // Parameter es una variable de entorno con exactamente un origen:

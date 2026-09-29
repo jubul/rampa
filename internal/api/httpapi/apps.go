@@ -87,7 +87,6 @@ func fillFromManifest(row *store.Application, m *manifest.Application, raw strin
 }
 
 func (a *API) importApp(w http.ResponseWriter, r *http.Request) {
-	oc := orgCtx(r)
 	var body struct {
 		Manifest string `json:"manifest"`
 		RepoURL  string `json:"repo_url"`
@@ -106,8 +105,15 @@ func (a *API) importApp(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err, "")
 		return
 	}
-	row := &store.Application{OrgID: oc.Org.ID, RepoURL: body.RepoURL}
-	fillFromManifest(row, m, body.Manifest)
+	a.createApplication(w, r, m, body.Manifest, body.RepoURL)
+}
+
+// createApplication guarda una app ya validada (pegada o derivada de un spec)
+// y responde 201 con la Application. Lo comparten POST /apps y POST /apps/from-spec.
+func (a *API) createApplication(w http.ResponseWriter, r *http.Request, m *manifest.Application, raw, repoURL string) {
+	oc := orgCtx(r)
+	row := &store.Application{OrgID: oc.Org.ID, RepoURL: repoURL}
+	fillFromManifest(row, m, raw)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -130,7 +136,6 @@ func (a *API) importApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) updateAppManifest(w http.ResponseWriter, r *http.Request) {
-	oc := orgCtx(r)
 	var body struct {
 		Manifest string `json:"manifest"`
 		RepoURL  string `json:"repo_url"`
@@ -149,9 +154,16 @@ func (a *API) updateAppManifest(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err, "")
 		return
 	}
+	a.replaceManifest(w, r, chi.URLParam(r, "app"), m, body.Manifest, body.RepoURL)
+}
+
+// replaceManifest reemplaza el manifest de una app existente (el nombre no
+// puede cambiar) y responde 200. Lo comparten PUT /manifest y PUT /spec.
+func (a *API) replaceManifest(w http.ResponseWriter, r *http.Request, appName string, m *manifest.Application, raw, repoURL string) {
+	oc := orgCtx(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	row, err := a.Store.GetApplicationByName(ctx, oc.Org.ID, chi.URLParam(r, "app"))
+	row, err := a.Store.GetApplicationByName(ctx, oc.Org.ID, appName)
 	if err != nil {
 		a.fail(w, r, err, "application")
 		return
@@ -160,8 +172,8 @@ func (a *API) updateAppManifest(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, invalid(fmt.Sprintf("metadata.name no puede cambiar: la application es %q y el manifest dice %q", row.Name, m.Metadata.Name)), "")
 		return
 	}
-	fillFromManifest(row, m, body.Manifest)
-	row.RepoURL = body.RepoURL
+	fillFromManifest(row, m, raw)
+	row.RepoURL = repoURL
 	updated, err := a.Store.UpdateApplicationManifest(ctx, row)
 	if err != nil {
 		a.fail(w, r, err, "application")

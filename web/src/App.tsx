@@ -10,6 +10,11 @@ import { ClustersPage } from "./pages/ClustersPage";
 import { AppsPage } from "./pages/AppsPage";
 import { AppDetailPage } from "./pages/AppDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
+import { EditAppPage, NewAppPage } from "./pages/AppWizardPage";
+import { InfraPage } from "./pages/InfraPage";
+import { NewClusterPage } from "./pages/NewClusterPage";
+import { InfraRunPage } from "./pages/InfraRunPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const router = createBrowserRouter([
@@ -42,7 +47,13 @@ const router = createBrowserRouter([
       { path: "cloud-accounts", element: <CloudAccountsPage /> },
       { path: "clusters", element: <ClustersPage /> },
       { path: "apps", element: <AppsPage /> },
+      { path: "apps/new", element: <NewAppPage /> },
       { path: "apps/:app", element: <AppDetailPage /> },
+      { path: "apps/:app/edit", element: <EditAppPage /> },
+      { path: "empezar", element: <OnboardingPage /> },
+      { path: "infra", element: <InfraPage /> },
+      { path: "infra/new-cluster", element: <NewClusterPage /> },
+      { path: "infra/runs/:id", element: <InfraRunPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],

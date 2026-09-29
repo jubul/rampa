@@ -16,6 +16,7 @@ import (
 	"rampa.dev/internal/api/deploy"
 	"rampa.dev/internal/api/events"
 	"rampa.dev/internal/api/hub"
+	"rampa.dev/internal/api/infra"
 	"rampa.dev/internal/api/store"
 	"rampa.dev/pkg/protocol"
 )
@@ -29,9 +30,11 @@ type Deps struct {
 	Bus      *events.Bus
 	Hub      *hub.Hub
 	Pipeline *deploy.Pipeline
-	Config   config.Config
-	Log      *slog.Logger
-	Version  string
+	// Infra es el runner de OpenTofu. nil deshabilita los endpoints /infra (501).
+	Infra   *infra.Service
+	Config  config.Config
+	Log     *slog.Logger
+	Version string
 }
 
 // API es el conjunto de handlers.
@@ -87,6 +90,10 @@ func (a *API) routesV1(r chi.Router) {
 	if a.Hub != nil {
 		r.Get("/agent/connect", a.Hub.ServeHTTP)
 	}
+	if a.Infra != nil {
+		// Backend http de estado de OpenTofu: autentica con el token del run, no con sesión.
+		r.Mount("/tfstate", a.Infra.StateHandler())
+	}
 
 	r.Group(func(r chi.Router) {
 		r.Use(a.Auth.RequireAuth)
@@ -127,11 +134,26 @@ func (a *API) routesV1(r chi.Router) {
 			r.With(admin).Delete("/clusters/{id}", a.deleteCluster)
 			r.With(admin).Post("/clusters/{id}/rotate-token", a.rotateClusterToken)
 
+			r.Get("/onboarding", a.onboarding)
+
 			r.Get("/apps", a.listApps)
 			r.With(developer).Post("/apps", a.importApp)
+			r.With(developer).Post("/apps/preview", a.previewApp)
+			r.With(developer).Post("/apps/from-spec", a.createAppFromSpec)
 			r.Get("/apps/{app}", a.getApp)
 			r.With(developer).Put("/apps/{app}/manifest", a.updateAppManifest)
+			r.Get("/apps/{app}/spec", a.getAppSpec)
+			r.With(developer).Put("/apps/{app}/spec", a.updateAppSpec)
+			r.Get("/apps/{app}/scaffold.zip", a.scaffoldZip)
 			r.With(developer).Delete("/apps/{app}", a.deleteApp)
+
+			r.Get("/infra/modules", a.listInfraModules)
+			r.With(admin).Post("/infra/clusters", a.createInfraCluster)
+			r.Get("/infra/runs", a.listInfraRuns)
+			r.Get("/infra/runs/{id}", a.getInfraRun)
+			r.Get("/infra/runs/{id}/log", a.infraRunLog)
+			r.With(admin).Post("/infra/runs/{id}/destroy", a.destroyInfraRun)
+			r.With(admin).Post("/infra/runs/{id}/retry", a.retryInfraRun)
 
 			r.Get("/apps/{app}/scopes", a.listScopes)
 			r.With(developer).Put("/apps/{app}/scopes/{scope}", a.bindScope)

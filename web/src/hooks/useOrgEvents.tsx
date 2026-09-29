@@ -10,6 +10,17 @@ import type { Event } from "../api/types";
 
 const MAX_LIVE_EVENTS = 300;
 
+// Eventos que pueden cambiar el estado de algún paso del onboarding.
+const ONBOARDING_KINDS = new Set([
+  "cluster.online",
+  "cluster.created",
+  "cluster.deleted",
+  "application.imported",
+  "application.deleted",
+  "deployment.healthy",
+  "cloud_account.verified",
+]);
+
 export type StreamState = "connecting" | "open" | "error";
 
 interface LiveEventsContextValue {
@@ -74,6 +85,7 @@ export function OrgEventsProvider({ org, children }: { org: string; children: Re
         default:
           break;
       }
+      if (ONBOARDING_KINDS.has(ev.kind)) void qc.invalidateQueries({ queryKey: keys.onboarding(org) });
       // El listado histórico de eventos también se refresca, con un poco de calma.
       void qc.invalidateQueries({ queryKey: ["org", org, "events"] });
     },

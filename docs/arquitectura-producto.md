@@ -12,7 +12,8 @@ Este documento fija la arquitectura. Las decisiones puntuales están en `adr/000
 4. **`rampa.yaml` sigue siendo la fuente de verdad de la app.** El plano de control lo importa desde el repo y lo valida con el mismo paquete que el CLI.
 5. **API first.** La web y el CLI son clientes de la misma API. Nada se puede hacer desde la web que no se pueda hacer con `curl`.
 6. **Multi-tenant desde el día uno.** Toda tabla tiene `org_id`. Todo handler filtra por organización. Un binario, muchos clientes. La opción self-hosted es el mismo binario con una sola organización.
-7. **El chart único vive en la API, el agente es un aplicador.** `charts/rampa-app` va embebido en el binario de la API, que renderiza y manda al agente objetos de Kubernetes en JSON. El agente los aplica y observa. Cambiar el chart no requiere actualizar agentes.
+7. **Clicks primero, YAML siempre disponible.** Todo lo que se puede hacer se puede hacer desde la web con formularios. Todo lo que se hace desde la web queda expresado en algo versionable: el `rampa.yaml` de la app, los módulos de OpenTofu de la infraestructura.
+8. **El chart único vive en la API, el agente es un aplicador.** `charts/rampa-app` va embebido en el binario de la API, que renderiza y manda al agente objetos de Kubernetes en JSON. El agente los aplica y observa. Cambiar el chart no requiere actualizar agentes.
 
 ## 2. Componentes
 
@@ -44,7 +45,8 @@ Este documento fija la arquitectura. Las decisiones puntuales están en `adr/000
 | **CLI** | Lo que ya existe. Pasa a hablar con la API (`rampa login`, `rampa deploy` llama a la API en vez de escribir un repo). | `cmd/rampa`, `internal/cli` |
 | **Paquetes compartidos** | `manifest` (rampa.yaml), `render` (values), `protocol` (mensajes agente), `provider` (nubes). | `pkg/` |
 | **Chart de app** | El chart único. Embebido en la API (`charts/embed.go`). | `charts/rampa-app` |
-| **Services** | Módulos OpenTofu por tipo y por nube. Los corre el agente. | `terraform/modules/<provider>/<tipo>` |
+| **Runner de infraestructura** | Corre OpenTofu en el plano de control con la identidad de la cuenta del cliente: crea clusters (y después services). Estado cifrado en Postgres vía backend http. | `internal/api/infra`, `terraform/modules/<provider>/<tipo>` (embebidos en la API) |
+| **Módulos de infraestructura** | OpenTofu por nube: `aws/eks-cluster` crea VPC, EKS Auto Mode, IRSA y el agente instalado. `aws/postgres` es el primer service. | `terraform/modules/` |
 
 ## 3. Modelo de datos
 
@@ -65,7 +67,10 @@ Todo cuelga de `organizations`. Los nombres son tablas de Postgres.
 | `services` | org_id, application_id, name, type, size, scopes, status, provider_state_ref | El state de tofu está en un bucket del cliente. |
 | `approvals` | org_id, deployment_id, required_by_policy, approved_by, approved_at | Prod requiere aprobación por defecto. |
 | `events` | org_id, actor, kind, subject_type, subject_id, payload, created_at | Auditoría y timeline. La web los recibe por SSE. |
-| `agent_commands` | org_id, cluster_id, kind, payload, status, result, created_at, acked_at | Cola durable de comandos al agente. Sobrevive a reconexiones. |
+| `agent_commands` | org_id, cluster_id, kind, payload, status, result, created_at, acked_at | Cola durable de comandos al agente. Sobrevive a reconexiones. Un reaper cierra los que quedan sin resultado. |
+| `infra_runs` | org_id, kind, provider, module, cloud_account_id, cluster_id, name, status, inputs, outputs, error, requested_by | Cada ejecución de OpenTofu. `inputs` nunca tiene secretos. |
+| `infra_run_logs` | run_id, seq, line | Log línea por línea, para el stream en vivo. |
+| `infra_states` | run_id, ciphertext, lock_info | Estado de OpenTofu cifrado con AES-256-GCM. Un run solo puede leer el suyo. |
 
 ## 4. Flujo de deploy
 
@@ -77,6 +82,17 @@ Todo cuelga de `organizations`. Los nombres son tablas de Postgres.
 6. `undeploy` de un scope es borrar el namespace. Los scopes efímeros expiran por TTL o al cerrar el PR.
 
 Rollback es un deploy con la imagen anterior. El historial de deployments es el historial.
+
+## 4b. Flujo de crear un cluster con un click
+
+1. En la web, el usuario elige la cuenta conectada, nombre, entorno, versión y dominio. `POST /infra/clusters`.
+2. La API crea el `Cluster` en Rampa con su token (offline) y encola un `InfraRun` con los inputs del módulo `aws/eks-cluster`.
+3. El runner escribe en un directorio temporal el root module y los módulos embebidos, asume el rol de la cuenta con el external ID y obtiene credenciales de una hora, y corre `tofu init`, `plan` y `apply`. Las credenciales van al subproceso por entorno; no tocan disco ni log. El estado va cifrado al backend http de la propia API.
+4. El módulo crea la red, el cluster con Auto Mode, el proveedor OIDC y el rol del agente, e instala el chart `rampa-agent` con Helm usando el token del cluster y el rol como anotación IRSA.
+5. El agente arranca, se conecta al plano de control, y el cluster pasa a online. La web lo muestra sin que el usuario haya copiado nada.
+6. Destruir el cluster es `tofu destroy` desde el mismo run. Un cluster registrado a mano no se destruye desde Rampa.
+
+Sumar una nube nueva es escribir el módulo `<nube>/<tipo>-cluster` y declararlo en el registro de módulos. El flujo, la web y el estado no cambian. Ver ADR 0003.
 
 ## 5. El agente
 
@@ -144,7 +160,7 @@ La interfaz se implementa completa para AWS en la Fase A. GCP y Azure llegan con
 
 | Fase | Semanas | Entregable | Listo cuando |
 |---|---|---|---|
-| **A: núcleo** | 1 a 6 | API con auth, orgs, cuentas AWS, clusters, apps, scopes, deployments, eventos. Agente que aplica y reporta. Web mínima: conectar AWS, instalar agente, importar app, desplegar, ver estado. | Nuestro equipo despliega a producción desde la web. |
+| **A: núcleo** | 1 a 6 | API con auth, orgs, cuentas AWS, clusters, apps, scopes, deployments, eventos. Agente que aplica y reporta. Web con onboarding guiado: conectar AWS, crear el cluster con un click (OpenTofu ejecutado por Rampa), crear apps con formularios sin YAML, desplegar, ver estado. | Nuestro equipo despliega a producción desde la web sin escribir YAML. |
 | **B: el día a día** | 6 a 12 | GitHub App y scopes efímeros. Parameters y secretos desde la web. Aprobaciones de prod. Auditoría. CLI contra la API. Logs en vivo. | Un equipo externo lo usa sin hablar con nosotros. |
 | **C: datos y costos** | 12 a 20 | Services con OpenTofu corrido por el agente: postgres, redis, s3, sqs. Costos por app y scope. GCP completo. | Un cliente pide un Postgres desde la web y lo tiene en 15 minutos. |
 | **D: enterprise** | 20 en adelante | Azure. SSO SAML/OIDC de la org del cliente. RBAC fino. Modo self-hosted. Billing. | Se puede firmar un contrato con un área de compras. |

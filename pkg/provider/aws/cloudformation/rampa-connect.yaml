@@ -21,7 +21,165 @@ Parameters:
       Identidad IAM del plano de control de Rampa que va a asumir el rol.
       La completa Rampa; no la cambies.
 
+  ManageInfrastructure:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Si Rampa puede crear infraestructura en esta cuenta (clusters EKS, bases de
+      datos, colas, buckets) con OpenTofu ejecutado por el plano de control.
+      Con "false" Rampa solo despliega en clusters que ya existen.
+
+Conditions:
+  ManageInfra: !Equals [!Ref ManageInfrastructure, "true"]
+
 Resources:
+  RampaInfrastructurePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: ManageInfra
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-infrastructure"
+      Description: Permite a Rampa crear y destruir la infraestructura que administra (red, EKS, IAM acotado, services rampa-*).
+      Roles: [!Ref RampaConnectRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Network
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - ec2:CreateVpc
+              - ec2:DeleteVpc
+              - ec2:ModifyVpcAttribute
+              - ec2:CreateSubnet
+              - ec2:DeleteSubnet
+              - ec2:ModifySubnetAttribute
+              - ec2:CreateInternetGateway
+              - ec2:DeleteInternetGateway
+              - ec2:AttachInternetGateway
+              - ec2:DetachInternetGateway
+              - ec2:CreateNatGateway
+              - ec2:DeleteNatGateway
+              - ec2:AllocateAddress
+              - ec2:ReleaseAddress
+              - ec2:AssociateAddress
+              - ec2:DisassociateAddress
+              - ec2:CreateRouteTable
+              - ec2:DeleteRouteTable
+              - ec2:CreateRoute
+              - ec2:DeleteRoute
+              - ec2:ReplaceRoute
+              - ec2:AssociateRouteTable
+              - ec2:DisassociateRouteTable
+              - ec2:CreateSecurityGroup
+              - ec2:DeleteSecurityGroup
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:AuthorizeSecurityGroupEgress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupEgress
+              - ec2:ModifySecurityGroupRules
+              - ec2:CreateTags
+              - ec2:DeleteTags
+              - ec2:CreateLaunchTemplate
+              - ec2:DeleteLaunchTemplate
+              - ec2:CreateLaunchTemplateVersion
+              - ec2:RunInstances
+              - ec2:TerminateInstances
+            Resource: "*"
+          - Sid: Eks
+            Effect: Allow
+            Action: eks:*
+            Resource: "*"
+          - Sid: IamRolesRampa
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+              - iam:UpdateAssumeRolePolicy
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:ListInstanceProfilesForRole
+              - iam:PassRole
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/rampa-*"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*-eks-cluster"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*-eks-node"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*-rampa-agent"
+          - Sid: IamOidcAndServiceLinked
+            Effect: Allow
+            Action:
+              - iam:CreateOpenIDConnectProvider
+              - iam:DeleteOpenIDConnectProvider
+              - iam:GetOpenIDConnectProvider
+              - iam:TagOpenIDConnectProvider
+              - iam:UntagOpenIDConnectProvider
+              - iam:UpdateOpenIDConnectProviderThumbprint
+              - iam:AddClientIDToOpenIDConnectProvider
+              - iam:CreateServiceLinkedRole
+              - iam:GetPolicy
+              - iam:GetPolicyVersion
+              - iam:ListPolicyVersions
+            Resource: "*"
+          - Sid: ServicesRampa
+            Effect: Allow
+            Action:
+              - rds:*
+              - elasticache:*
+              - sqs:*
+              - dynamodb:*
+            Resource: "*"
+            Condition:
+              StringLike:
+                aws:ResourceTag/rampa:app: "*"
+          - Sid: ServicesRampaCreate
+            Effect: Allow
+            Action:
+              - rds:Describe*
+              - rds:CreateDBInstance
+              - rds:CreateDBSubnetGroup
+              - rds:AddTagsToResource
+              - elasticache:Describe*
+              - elasticache:CreateReplicationGroup
+              - elasticache:CreateCacheSubnetGroup
+              - elasticache:AddTagsToResource
+              - sqs:CreateQueue
+              - sqs:GetQueueAttributes
+              - sqs:TagQueue
+              - dynamodb:CreateTable
+              - dynamodb:DescribeTable
+              - dynamodb:TagResource
+            Resource: "*"
+          - Sid: S3Rampa
+            Effect: Allow
+            Action: s3:*
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::rampa-*"
+              - !Sub "arn:${AWS::Partition}:s3:::rampa-*/*"
+          - Sid: LogsAndParams
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteLogGroup
+              - logs:DescribeLogGroups
+              - logs:PutRetentionPolicy
+              - logs:TagResource
+              - logs:ListTagsForResource
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - kms:DescribeKey
+              - kms:ListAliases
+            Resource: "*"
+
   RampaConnectRole:
     Type: AWS::IAM::Role
     Properties:
@@ -99,3 +257,6 @@ Outputs:
     Description: Nombre del rol creado.
     Value:
       Ref: RampaConnectRole
+  ManageInfrastructure:
+    Description: Si Rampa puede crear infraestructura en esta cuenta.
+    Value: !Ref ManageInfrastructure

@@ -79,7 +79,7 @@ Un token nunca otorga más que su dueño hoy: el rol efectivo en cada request es
 - `POST /v1/orgs/{org}/clusters/{id}/rotate-token` → nuevo token, el anterior deja de valer. La conexión viva del agente, autenticada con el token viejo, se cierra en el acto (close `1008`); el agente reconecta con el nuevo.
 - `env` es `nonprod` o `prod`. Un scope `prod` solo puede vivir en un cluster `prod`; el resto solo en `nonprod`. Si la org tiene un solo cluster de cada env, es el default al desplegar.
 
-`Cluster`: `{"id", "name", "env", "cloud_account_id", "domain", "ingress_class", "secret_store", "status": "offline|online", "agent_version", "kubernetes_version", "last_seen_at", "created_at"}`.
+`Cluster`: `{"id", "name", "env", "cloud_account_id", "domain", "ingress_class", "secret_store", "status": "offline|online|failed", "agent_version", "kubernetes_version", "agent_role_arn", "infra_run_id", "last_seen_at", "created_at"}`. `failed` es un cluster cuyo run de infraestructura falló; `infra_run_id` es `""` si no lo creó Rampa.
 
 **Conexión del agente:** `GET /v1/agent/connect` con `Authorization: Bearer <token del cluster>` y upgrade a WebSocket. Mensajes según `pkg/protocol`. La API:
 
@@ -106,6 +106,95 @@ Un token nunca otorga más que su dueño hoy: el rol efectivo en cada request es
 
 `Scope`: `{"name", "ephemeral", "declared", "cluster_id", "namespace": "checkout-api-prod", "url": "https://checkout.acme.com", "status": "unbound|idle|deploying|healthy|degraded|failed|deleting", "current_deployment": Deployment|null, "size", "replicas", "strategy", "ttl_expires_at"}`.
 
+## Applications sin YAML: spec estructurado
+
+La web crea y edita aplicaciones con formularios. El formulario produce un `ApplicationSpec` en JSON; la API lo convierte al `rampa.yaml` canónico con `pkg/manifest`, lo valida igual que un manifest pegado, y lo guarda. El `rampa.yaml` sigue siendo la fuente de verdad: el spec es solo otra forma de escribirlo, y siempre se puede pasar de uno a otro sin pérdida.
+
+`ApplicationSpec`:
+
+```json
+{
+  "name": "checkout-api",
+  "team": "payments",
+  "tier": 2,
+  "description": "API de checkout",
+  "type": "api",
+  "runtime": "go",
+  "port": 8080,
+  "healthcheck": "/health",
+  "schedule": "",
+  "scopes": [
+    {"name": "dev", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": null, "ttl": ""},
+    {"name": "prod", "size": "M", "replicas": 3, "strategy": "canary", "domain": "checkout.acme.com",
+     "autoscaling": {"min": 3, "max": 10, "cpu": 70}, "ttl": ""},
+    {"name": "pr", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": null, "ttl": "72h"}
+  ],
+  "parameters": [
+    {"name": "LOG_LEVEL", "source": "value", "value": "info", "scopes": []},
+    {"name": "LOG_LEVEL", "source": "value", "value": "debug", "scopes": ["dev", "pr"]},
+    {"name": "API_KEY", "source": "secret", "scopes": []},
+    {"name": "DB_URL", "source": "service", "service": "checkout-db", "key": "url", "scopes": []}
+  ],
+  "services": [
+    {"name": "checkout-db", "type": "postgres", "size": "S", "scopes": ["prod"]}
+  ]
+}
+```
+
+Reglas: `source` es `value`, `secret` o `service` y determina qué otros campos aplican (`value`; ninguno; `service` y `key`). `scopes` vacío significa todos. El scope `pr` es la plantilla de efímeros. Los defaults son los de `pkg/manifest` (tier 2, size S, replicas 1, strategy rolling, port 8080, healthcheck `/health`, ttl `72h`).
+
+- `POST /v1/orgs/{org}/apps/preview` `{"spec": ApplicationSpec}` → `{"manifest": "<yaml>", "valid": true, "details": []}`. No guarda nada. Sirve para mostrar el YAML resultante y los errores mientras el usuario completa el formulario. Con errores responde 200 con `valid: false` y `details`.
+- `POST /v1/orgs/{org}/apps/from-spec` `{"spec": ApplicationSpec, "repo_url": "..."}` → `Application` (201). Mismas validaciones y errores que `POST /apps`.
+- `GET /v1/orgs/{org}/apps/{app}/spec` → `{"spec": ApplicationSpec, "manifest": "<yaml>"}`. Si el manifest fue pegado a mano, el spec se deriva de él.
+- `PUT /v1/orgs/{org}/apps/{app}/spec` `{"spec": ApplicationSpec}` → `Application`. El nombre no puede cambiar.
+- `GET /v1/orgs/{org}/apps/{app}/scaffold.zip?github_org=<org de GitHub>` → zip con el proyecto inicial del golden path para el `type` y `runtime` de la app (hoy solo `api-go`), con el `rampa.yaml` real de la app y los workflows apuntando a `<github_org>/rampa`. Si no hay golden path para esa combinación, `invalid` con el mensaje de qué combinaciones existen. `github_org` cae a `settings.github_org` de la org y después a `CHANGEME`.
+
+`OrgSettings` suma `github_org` (string, opcional): la organización de GitHub donde vive el fork o copia de `rampa` que ejecuta los workflows reusables. Se cambia con `PATCH /v1/orgs/{org}`.
+
+## Onboarding guiado
+
+- `GET /v1/orgs/{org}/onboarding` → estado de los pasos para levantar infraestructura desde la web, sin escribir YAML:
+
+```json
+{
+  "steps": [
+    {"key": "cloud",   "title": "Conectar una cuenta de nube",  "done": true,  "detail": "acme-nonprod (aws, connected)"},
+    {"key": "cluster", "title": "Registrar o crear un cluster", "done": true,  "detail": "eks-nonprod"},
+    {"key": "agent",   "title": "Instalar el agente",           "done": false, "detail": "eks-nonprod está offline"},
+    {"key": "app",     "title": "Crear la primera aplicación",  "done": false, "detail": ""},
+    {"key": "deploy",  "title": "Hacer el primer deploy",       "done": false, "detail": ""}
+  ],
+  "next": "agent",
+  "complete": false
+}
+```
+
+`cloud` está hecho si hay al menos una cuenta `connected`. `cluster` si hay al menos un cluster. `agent` si al menos un cluster está `online`. `app` si hay una application. `deploy` si algún deployment llegó a `healthy`.
+
+## Infraestructura con clicks: OpenTofu ejecutado por Rampa
+
+Una vez conectada la cuenta, Rampa crea infraestructura en la nube del cliente sin que escriba nada. La API genera un root module de OpenTofu que invoca los módulos de `terraform/modules/<provider>/...` (embebidos en el binario), asume la identidad de la cuenta conectada y corre `tofu init`, `plan` y `apply`. Es el mismo mecanismo para todos los proveedores: cambia el módulo, no el flujo. El estado se guarda cifrado en Postgres a través del backend `http` de OpenTofu. Cada ejecución es un `InfraRun` con log en vivo.
+
+El primer caso es el cluster: el módulo `aws/eks-cluster` crea VPC, cluster EKS con Auto Mode, proveedor OIDC, rol IAM del agente e **instala el agente con Helm en el mismo apply**, con el token que la API generó al registrar el cluster. Al terminar, el cluster aparece online en Rampa sin que el cliente haya tocado una terminal.
+
+- `POST /v1/orgs/{org}/infra/clusters` `{"cloud_account_id": "...", "name": "rampa-nonprod", "env": "nonprod", "kubernetes_version": "1.33", "domain": "apps.dev.acme.com", "ingress_class": "nginx", "admin_principal_arns": ["arn:aws:iam::123:user/juan"]}` → 202 `InfraRun`. Requiere `admin` y una cuenta `connected`. La API: (1) crea el `Cluster` en Rampa (offline, con su token) y lo enlaza al run; (2) encola el run con los inputs del módulo, incluidos `api_url` y el token del agente como variable sensible; (3) al terminar con éxito guarda los outputs en el run y `agent_role_arn` en el cluster; si falla, el cluster queda con `status: "failed"` y `infra_run_id` para reintentar o borrar. `admin_principal_arns` son las identidades IAM del cliente que van a poder usar `kubectl`; opcional.
+- `GET /v1/orgs/{org}/infra/runs?limit=20` → `{"items": [InfraRun]}`. `GET /v1/orgs/{org}/infra/runs/{id}` → `InfraRun`.
+- `GET /v1/orgs/{org}/infra/runs/{id}/log` → `text/plain` con el log completo. Con `?stream=1` (EventSource no puede mandar headers) responde Server-Sent Events: primero las líneas ya guardadas, después las nuevas en vivo (`event: line`, `data: <texto>`), `event: status` con `data: <estado>` en cada cambio, y cierra con `event: done` cuando el run termina.
+- `POST /v1/orgs/{org}/infra/runs/{id}/destroy` (admin) → encola `tofu destroy` con los mismos inputs; al terminar borra el cluster de Rampa si no tiene scopes. `POST .../retry` → vuelve a encolar un run `failed`.
+- `GET /v1/orgs/{org}/infra/modules` → `{"items": [{"provider": "aws", "kind": "cluster", "module": "aws/eks-cluster", "available": true, "inputs": [{"name": "kubernetes_version", "label": "...", "default": "1.33", "options": ["1.31","1.32","1.33","1.34"]}]}, {"provider": "gcp", "kind": "cluster", "available": false}, ...]}`. La web arma el formulario con esto. La respuesta incluye `"runner_ready": bool` y, si es `false`, `"runner_error"` con qué falta (tofu en el PATH o `RAMPA_STATE_KEY`).
+
+`InfraRun`: `{"id", "kind": "cluster", "provider": "aws", "module": "aws/eks-cluster", "cloud_account_id", "cluster_id", "name", "operation": "apply|destroy", "attempt": 1, "status", "inputs": {}, "outputs": {}, "error": "", "log_tail": ["..."], "requested_by": User, "created_at", "started_at", "finished_at"}`. Destroy y retry reencolan la misma fila (cambia `operation` y sube `attempt`) para que el estado de OpenTofu sea el mismo. Estados: `queued → initializing → planning → applying → succeeded | failed`, y `destroying → destroyed | failed`. `inputs` nunca incluye valores sensibles (el token del agente se inyecta en el momento de correr y no se persiste en el run).
+
+**Runner.** Un worker en la API toma runs `queued` de a uno por cuenta de nube (lock en la tabla), escribe en un directorio temporal el root module y los módulos embebidos, exporta las credenciales temporales que obtuvo asumiendo el rol de la cuenta (nunca se escriben a disco ni al log), configura el backend `http` y ejecuta el binario `tofu`. El log se guarda por líneas en `infra_run_logs` y se emite como eventos `infra_run.line` para el stream. Timeout por defecto 40 minutos.
+
+**Backend de estado.** `GET|POST|DELETE /v1/tfstate/{run_id}` más `LOCK` y `UNLOCK`, autenticados con `Authorization: Bearer <token del run>` que la API genera por run y solo conoce el runner. El estado se cifra con AES-256-GCM con `RAMPA_STATE_KEY` antes de guardarse en `infra_states`. Un run solo puede leer su propio estado.
+
+**Permisos en la nube.** Crear clusters requiere más permisos que conectar la cuenta. En AWS, el stack `RampaConnect` tiene el parámetro `ManageInfrastructure` (default `true`) que agrega la política de administración de infraestructura (VPC, EKS, IAM acotado a roles `rampa-*` y `<cluster>-*`, RDS, ElastiCache, SQS, S3 y DynamoDB acotados a `rampa-*`). Si la cuenta se conectó sin ese permiso, el run falla en `planning` con el error de AWS y el mensaje sugiere actualizar el stack.
+
+Variables del servidor: `RAMPA_TOFU_BIN` (default `tofu`, buscado en `PATH`; si no está, los endpoints de infra responden `501 not_implemented` con cómo instalarlo), `RAMPA_STATE_KEY` (32 bytes en base64 o hex; requerido para infra), `RAMPA_INFRA_WORKDIR` (default el temp del sistema), `RAMPA_INFRA_TIMEOUT` (default `40m`), `RAMPA_INFRA_CONCURRENCY` (default `2`).
+
+Proveedores: `aws` con `eks-cluster` implementado. `gcp/gke-cluster`, `azure/aks-cluster`, `digitalocean/doks-cluster`, `oci/oke-cluster` figuran en `/infra/modules` con `available: false` hasta que existan sus módulos.
+
 ## Deployments
 
 - `POST /v1/orgs/{org}/apps/{app}/scopes/{scope}/deployments` `{"image": "sha-a1b2c3d", "message": "opcional"}` → `Deployment`. `image` puede ser un tag o una referencia completa; un tag (sin `/`) tiene que cumplir `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$` o la respuesta es `invalid`. `conflict` si el scope está en `deleting`. Flujo:
@@ -129,7 +218,7 @@ Estados: `awaiting_approval → queued → applying → progressing → healthy 
 
 `Event`: `{"id", "kind", "actor": {"type": "user|token|agent|system", "id", "name"}, "subject_type": "org|cloud_account|cluster|application|scope|deployment", "subject_id", "message", "payload": {}, "created_at"}`.
 
-Kinds (lista cerrada; la web registra un listener por cada uno, así que un kind nuevo se agrega acá y en `web/src/api/types.ts`):
+Kinds (lista cerrada; la web registra un listener por cada uno, así que un kind nuevo se agrega acá y en `web/src/api/types.ts`):, `cluster.infra_ready`, `infra_run.status`. Además `infra_run.line` se emite solo en vivo (no se persiste): son las líneas del log de un run.
 
 | Sujeto | Kinds |
 |---|---|
@@ -161,6 +250,11 @@ Los eventos de `scope` y `deployment` llevan siempre `payload.app` y `payload.sc
 | `RAMPA_AGENT_IMAGE` | `ghcr.io/CHANGEME/rampa-agent:latest` | Imagen que va en el `install_command` |
 | `RAMPA_CHART_REPO` | `oci://ghcr.io/CHANGEME/charts/rampa-agent` | Chart que va en el `install_command` |
 | `RAMPA_DEPLOY_TIMEOUT` | `10m` | Cuánto espera el agente a que un deploy esté sano. También es el timeout que asume el reaper para comandos sin `timeout_seconds` |
+| `RAMPA_TOFU_BIN` | `tofu` | Binario de OpenTofu para los runs de infraestructura |
+| `RAMPA_STATE_KEY` | vacío | Clave AES-256 (32 bytes, base64 o hex) para cifrar el estado de OpenTofu. Sin ella, infra deshabilitada |
+| `RAMPA_INFRA_WORKDIR` | temp del sistema | Directorio de trabajo de los runs |
+| `RAMPA_INFRA_TIMEOUT` | `40m` | Tiempo máximo de un run |
+| `RAMPA_INFRA_CONCURRENCY` | `2` | Runs simultáneos |
 | `RAMPA_AWS_TRUSTED_PRINCIPAL_ARN` | vacío | Identidad IAM del plano de control (rol o usuario) que asume los roles de los clientes. Sin esto `verify` de cuentas AWS falla con un mensaje claro |
 | `RAMPA_AWS_DEFAULT_REGION` | `us-east-1` | Región para el link de CloudFormation y el cliente STS base cuando la cuenta no trae una |
 | `RAMPA_AWS_TEMPLATE_URL` | vacío | URL en S3 (o CloudFront delante de S3) de una copia de `rampa-connect.yaml`. Si está, `instructions.url` es el link de quick-create de CloudFormation; si no, no hay link y `instructions.command` descarga la plantilla desde la API y usa `--template-body` |

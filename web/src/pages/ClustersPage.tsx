@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Boxes, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useCloudAccounts, useClusters, useCreateCluster, useRemoveCluster, useRotateClusterToken } from "../api/hooks";
 import { useOrgRole } from "../auth/AuthContext";
@@ -8,6 +8,7 @@ import { errorMessage } from "../api/client";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
+import { LinkButton } from "../components/ui/LinkButton";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
 import { Field } from "../components/ui/Field";
@@ -28,7 +29,12 @@ export function ClustersPage() {
   const rotate = useRotateClusterToken(org);
   const remove = useRemoveCluster(org);
 
-  const [createOpen, setCreateOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [createOpen, setCreateOpen] = useState(searchParams.get("new") === "1");
+  const closeCreate = () => {
+    setCreateOpen(false);
+    if (searchParams.has("new")) setSearchParams({}, { replace: true });
+  };
   const [issued, setIssued] = useState<{ cluster: ClusterWithToken; reason: "created" | "rotated" } | null>(null);
   const [toRotate, setToRotate] = useState<Cluster | null>(null);
   const [toDelete, setToDelete] = useState<Cluster | null>(null);
@@ -41,9 +47,14 @@ export function ClustersPage() {
         title="Clusters"
         description="Un agente por cluster. El agente abre una conexión saliente: no hace falta exponer nada."
         actions={
-          <Button onClick={() => setCreateOpen(true)} disabled={!isAdmin} title={isAdmin ? undefined : "Necesitás rol admin"} icon={<Plus className="size-4" />}>
-            Nuevo cluster
-          </Button>
+          <>
+            <Button variant="secondary" onClick={() => setCreateOpen(true)} disabled={!isAdmin} title={isAdmin ? undefined : "Necesitás rol admin"} icon={<Plus className="size-4" />}>
+              Registrar cluster existente
+            </Button>
+            <LinkButton to={`/o/${org}/infra/new-cluster`} icon={<Boxes className="size-4" />}>
+              Crear cluster con un click
+            </LinkButton>
+          </>
         }
       />
 
@@ -56,11 +67,14 @@ export function ClustersPage() {
           <EmptyState
             icon={<Boxes className="size-8" />}
             title="No hay clusters"
-            description="Registrá un cluster para obtener el comando de instalación del agente."
+            description="Creá uno con un click o registrá uno existente para obtener el comando de instalación del agente."
             action={
-              <Button onClick={() => setCreateOpen(true)} disabled={!isAdmin} icon={<Plus className="size-4" />}>
-                Nuevo cluster
-              </Button>
+              <div className="flex gap-2">
+                <LinkButton to={`/o/${org}/infra/new-cluster`}>Crear cluster con un click</LinkButton>
+                <Button variant="secondary" onClick={() => setCreateOpen(true)} disabled={!isAdmin} icon={<Plus className="size-4" />}>
+                  Registrar cluster existente
+                </Button>
+              </div>
             }
           />
         ) : (
@@ -85,6 +99,11 @@ export function ClustersPage() {
                     <div className="text-xs text-slate-500">
                       {c.ingress_class} · {c.secret_store}
                     </div>
+                    {c.infra_run_id && (
+                      <Link to={`/o/${org}/infra/runs/${c.infra_run_id}`} className="text-xs font-medium text-slate-700 underline">
+                        Ver ejecución de infraestructura
+                      </Link>
+                    )}
                   </TD>
                   <TD>
                     <Badge tone={c.env === "prod" ? "blue" : "gray"}>{envLabels[c.env] ?? c.env}</Badge>
@@ -119,9 +138,9 @@ export function ClustersPage() {
       <CreateClusterDialog
         org={org}
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={closeCreate}
         onCreated={(c) => {
-          setCreateOpen(false);
+          closeCreate();
           setIssued({ cluster: c, reason: "created" });
         }}
       />
@@ -184,7 +203,7 @@ function CreateClusterDialog({
   onCreated: (c: ClusterWithToken) => void;
 }) {
   return (
-    <Dialog open={open} onClose={onClose} title="Nuevo cluster" description="Los datos del cluster se usan para renderizar ingress, URLs y secretos de las apps.">
+    <Dialog open={open} onClose={onClose} title="Registrar cluster existente" description="Los datos del cluster se usan para renderizar ingress, URLs y secretos de las apps.">
       {open && <CreateClusterForm org={org} onClose={onClose} onCreated={onCreated} />}
     </Dialog>
   );

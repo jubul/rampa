@@ -9,3 +9,9 @@ import "embed"
 //
 //go:embed all:rampa-app
 var RampaApp embed.FS
+
+// RampaAgent es el chart de instalación del agente (charts/rampa-agent). El
+// runner de infraestructura lo instala con Helm en los clusters que crea.
+//
+//go:embed all:rampa-agent
+var RampaAgent embed.FS

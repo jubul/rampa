@@ -24,6 +24,15 @@ const sizes: Record<Size, string> = {
   md: "h-9 px-3.5 text-sm gap-2",
 };
 
+export function buttonStyles(variant: Variant = "primary", size: Size = "md", className?: string): string {
+  return cn(
+    "inline-flex items-center justify-center rounded-md font-medium transition-colors disabled:cursor-not-allowed",
+    variants[variant],
+    sizes[size],
+    className,
+  );
+}
+
 export function Button({
   variant = "primary",
   size = "md",

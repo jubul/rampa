@@ -19,7 +19,7 @@ Una instancia corriendo de una application en un entorno. Cada scope es un names
 
 ### Deployment
 
-Llevar una imagen a un scope con una estrategia. Estrategias: `rolling` (default), `canary`, `bluegreen`. Cada deployment es un commit en `rampa-deploys`, así que el historial y el rollback son `git log` y `git revert`.
+Llevar una imagen a un scope con una estrategia. Estrategias: `rolling` (default), `canary`, `bluegreen`. Cada deployment queda registrado en Rampa con quién lo pidió, con qué imagen y cómo terminó. Rollback es desplegar la imagen anterior.
 
 ### Parameters
 
@@ -95,6 +95,10 @@ spec:
       scopes: [staging, prod] # opcional. Default: todos los permanentes. Los efímeros nunca reciben services gestionados
 ```
 
+## Dos formas de escribir lo mismo
+
+El `rampa.yaml` se puede escribir a mano en el repo o armar con formularios en la web. La web edita un spec estructurado y Rampa lo convierte al mismo `rampa.yaml`, sin pérdida en ninguna dirección. Lo que se crea con clicks se puede descargar como proyecto inicial con el YAML adentro. Lo que se escribe a mano se puede seguir editando con formularios.
+
 ## Tamaños
 
 Los tamaños son remeras, no CPUs. El chart los traduce.
@@ -111,8 +115,8 @@ Los tamaños son remeras, no CPUs. El chart los traduce.
 1. `rampa init` crea el repo desde un template: código mínimo, Dockerfile, `rampa.yaml`, workflow de CI.
 2. Push a `main`: el workflow construye la imagen, la escanea, la sube a ECR y llama a `rampa deploy --scope dev`.
 3. Abrir un PR: se construye y despliega a `pr-<n>`. El bot comenta la URL. Cerrar el PR destruye el scope.
-4. Promover a `staging` y `prod`: `rampa deploy --scope prod --image <tag>` abre un PR en `rampa-deploys`. Al mergear, Argo CD aplica la estrategia declarada.
-5. Rollback: `git revert` en `rampa-deploys`, o `rampa deploy` con el tag anterior.
+4. Promover a `staging` y `prod`: desde la web con el botón Desplegar, o con `rampa deploy --scope prod --image <tag>`. Si la organización exige aprobación para producción, otro admin la aprueba. El agente aplica la estrategia declarada y reporta el avance en vivo.
+5. Rollback: desplegar la imagen anterior, desde la web o con `rampa deploy`.
 
 ## Lo que Rampa no hace (por ahora)
 

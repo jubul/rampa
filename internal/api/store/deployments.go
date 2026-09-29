@@ -153,6 +153,13 @@ func (s *Store) LastHealthyDeploymentForScope(ctx context.Context, orgID, scopeI
 		ORDER BY d.finished_at DESC NULLS LAST, d.created_at DESC LIMIT 1`, orgID, scopeID, DeploymentHealthy, excludeID))
 }
 
+// LatestDeploymentWithStatus devuelve el deployment más reciente de la org en
+// un estado dado (por ejemplo healthy, para el onboarding). ErrNotFound si no hay.
+func (s *Store) LatestDeploymentWithStatus(ctx context.Context, orgID, status string) (*Deployment, error) {
+	return scanDeployment(s.db.QueryRow(ctx, `SELECT `+deploymentColumns+deploymentFrom+`
+		WHERE d.org_id = $1 AND d.status = $2 ORDER BY d.finished_at DESC NULLS LAST, d.created_at DESC LIMIT 1`, orgID, status))
+}
+
 // ---- approvals ----
 
 // CreateApproval registra que un deployment necesita aprobación.

@@ -6,6 +6,8 @@ import type {
   AddMemberRequest,
   ApiErrorBody,
   Application,
+  AppSpecResponse,
+  ApplicationSpec,
   BindScopeRequest,
   CloudAccount,
   Cluster,
@@ -13,6 +15,12 @@ import type {
   CreateCloudAccountRequest,
   CreateClusterRequest,
   CreateDeploymentRequest,
+  CreateInfraClusterRequest,
+  FromSpecRequest,
+  InfraModulesResponse,
+  InfraRun,
+  Onboarding,
+  PreviewResponse,
   CreateOrgRequest,
   CreateTokenRequest,
   Deployment,
@@ -33,6 +41,7 @@ import type {
   VersionInfo,
 } from "./types";
 import { EVENT_KINDS } from "./types";
+import { parseLogEvent, type LogStreamEvent } from "../lib/infra";
 
 export const API_BASE = "/v1";
 
@@ -262,6 +271,42 @@ export const apps = {
   updateManifest: (org: string, app: string, body: UpdateManifestRequest) =>
     request<Application>(`/orgs/${enc(org)}/apps/${enc(app)}/manifest`, { method: "PUT", body }),
   remove: (org: string, app: string) => request<void>(`/orgs/${enc(org)}/apps/${enc(app)}`, { method: "DELETE" }),
+  preview: (org: string, spec: ApplicationSpec, signal?: AbortSignal) =>
+    request<PreviewResponse>(`/orgs/${enc(org)}/apps/preview`, { method: "POST", body: { spec }, signal }),
+  createFromSpec: (org: string, body: FromSpecRequest) =>
+    request<Application>(`/orgs/${enc(org)}/apps/from-spec`, { method: "POST", body }),
+  getSpec: (org: string, app: string, signal?: AbortSignal) =>
+    request<AppSpecResponse>(`/orgs/${enc(org)}/apps/${enc(app)}/spec`, { signal }),
+  updateSpec: (org: string, app: string, spec: ApplicationSpec) =>
+    request<Application>(`/orgs/${enc(org)}/apps/${enc(app)}/spec`, { method: "PUT", body: { spec } }),
+};
+
+/** URL del zip del proyecto inicial. Va en un <a download>; la cookie viaja sola. */
+export function scaffoldUrl(org: string, app: string, githubOrg: string): string {
+  return `${API_BASE}/orgs/${enc(org)}/apps/${enc(app)}/scaffold.zip${buildQuery({ github_org: githubOrg.trim() })}`;
+}
+
+// Onboarding
+
+export const onboarding = {
+  get: (org: string, signal?: AbortSignal) => request<Onboarding>(`/orgs/${enc(org)}/onboarding`, { signal }),
+};
+
+// Infraestructura
+
+export const infra = {
+  modules: (org: string, signal?: AbortSignal) =>
+    request<InfraModulesResponse>(`/orgs/${enc(org)}/infra/modules`, { signal }),
+  runs: (org: string, limit = 20, signal?: AbortSignal) =>
+    request<ListResponse<InfraRun>>(`/orgs/${enc(org)}/infra/runs`, { query: { limit }, signal }),
+  run: (org: string, id: string, signal?: AbortSignal) =>
+    request<InfraRun>(`/orgs/${enc(org)}/infra/runs/${enc(id)}`, { signal }),
+  createCluster: (org: string, body: CreateInfraClusterRequest) =>
+    request<InfraRun>(`/orgs/${enc(org)}/infra/clusters`, { method: "POST", body }),
+  retry: (org: string, id: string) =>
+    request<InfraRun>(`/orgs/${enc(org)}/infra/runs/${enc(id)}/retry`, { method: "POST" }),
+  destroy: (org: string, id: string) =>
+    request<InfraRun>(`/orgs/${enc(org)}/infra/runs/${enc(id)}/destroy`, { method: "POST" }),
 };
 
 // Scopes
@@ -414,4 +459,79 @@ export function openEvents(orgSlug: string, filter: StreamFilter, handlers: Stre
     if (source) detach(source);
     source = null;
   };
+}
+
+export interface InfraLogHandlers {
+  onEvent: (event: LogStreamEvent) => void;
+  /** Cada apertura reenvía las líneas guardadas: el consumidor debe descartar su buffer. */
+  onOpen?: () => void;
+  onError?: (e: globalThis.Event) => void;
+}
+
+/**
+ * Abre el log de un run en vivo (SSE con ?stream=1) y devuelve la limpieza.
+ * Eventos: `line`, `status` y `done`. Con `done` el servidor cierra y no
+ * reabrimos. Si la respuesta HTTP falla (EventSource queda CLOSED) reabrimos
+ * con backoff exponencial, igual que openEvents.
+ */
+export function openInfraLog(orgSlug: string, runId: string, handlers: InfraLogHandlers): () => void {
+  const url = `${API_BASE}/orgs/${enc(orgSlug)}/infra/runs/${enc(runId)}/log?stream=1`;
+  const CLOSED = 2;
+  const names = ["line", "status", "done"] as const;
+  let source: EventSource | null = null;
+  let stopped = false;
+  let delay = EVENTS_RETRY_MIN_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const listener = ((raw: MessageEvent) => {
+    const ev = parseLogEvent(raw.type, raw.data);
+    if (!ev) return;
+    if (ev.type === "done") {
+      handlers.onEvent(ev);
+      finish();
+      return;
+    }
+    handlers.onEvent(ev);
+  }) as EventListener;
+
+  const onOpen = () => {
+    delay = EVENTS_RETRY_MIN_MS;
+    handlers.onOpen?.();
+  };
+
+  const onError = (e: globalThis.Event) => {
+    handlers.onError?.(e);
+    const current = source;
+    if (stopped || !current || current.readyState !== CLOSED) return;
+    detach(current);
+    source = null;
+    timer = setTimeout(connect, delay);
+    delay = Math.min(delay * 2, EVENTS_RETRY_MAX_MS);
+  };
+
+  function detach(es: EventSource) {
+    for (const n of names) es.removeEventListener(n, listener);
+    es.removeEventListener("open", onOpen);
+    es.removeEventListener("error", onError);
+    es.close();
+  }
+
+  function finish() {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+    if (source) detach(source);
+    source = null;
+  }
+
+  function connect() {
+    if (stopped) return;
+    const es = new EventSource(url, { withCredentials: true });
+    source = es;
+    for (const n of names) es.addEventListener(n, listener);
+    es.addEventListener("open", onOpen);
+    es.addEventListener("error", onError);
+  }
+
+  connect();
+  return finish;
 }

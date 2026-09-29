@@ -66,12 +66,19 @@ export function SettingsPage() {
                       className="size-4 rounded border-slate-300"
                       checked={orgQ.data.settings.require_approval_prod}
                       disabled={!isAdmin || update.isPending}
-                      onChange={(e) => update.mutate({ settings: { require_approval_prod: e.target.checked } })}
+                      onChange={(e) => update.mutate({ settings: { ...orgQ.data.settings, require_approval_prod: e.target.checked } })}
                     />
                     Exigir aprobación
                   </label>
                 </dd>
               </div>
+              <GithubOrgField
+                key={orgQ.data.settings.github_org ?? ""}
+                value={orgQ.data.settings.github_org ?? ""}
+                canEdit={isAdmin}
+                saving={update.isPending}
+                onSave={(v) => update.mutate({ settings: { ...orgQ.data.settings, github_org: v } })}
+              />
             </dl>
           )}
           {update.isError && (
@@ -377,5 +384,29 @@ function TokenIssuedDialog({ token, onClose }: { token: Token | null; onClose: (
         </div>
       )}
     </Dialog>
+  );
+}
+
+function GithubOrgField({ value, canEdit, saving, onSave }: { value: string; canEdit: boolean; saving: boolean; onSave: (v: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const dirty = draft.trim() !== value;
+  return (
+    <div className="sm:col-span-4">
+      <dt className="text-xs text-slate-500">Organización de GitHub</dt>
+      <dd className="mt-1 flex flex-wrap items-center gap-2">
+        <Input
+          className="max-w-xs"
+          aria-label="Organización de GitHub"
+          value={draft}
+          disabled={!canEdit}
+          placeholder="acme"
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <Button size="sm" variant="secondary" disabled={!canEdit || !dirty} loading={saving} onClick={() => onSave(draft.trim())}>
+          Guardar
+        </Button>
+        <span className="text-xs text-slate-500">Donde vive la copia de rampa que corre los workflows. Se usa en el proyecto inicial.</span>
+      </dd>
+    </div>
   );
 }

@@ -29,6 +29,9 @@ const (
 	devPGDBName = "rampa"
 	// devSessionSecret es fijo a propósito: en --dev las sesiones sobreviven reinicios.
 	devSessionSecret = "rampa-dev-session-secret-no-usar-en-produccion-0123456789"
+	// devStateKey es la clave AES-256 (32 bytes en hex) del estado de OpenTofu en
+	// --dev, fija para que el estado sobreviva reinicios. Solo para desarrollo.
+	devStateKey = "72616d70612d6465762d73746174652d6b65792d6e6f2d7573652d70726f6421"
 )
 
 func main() {
@@ -56,7 +59,7 @@ func newRootCmd() *cobra.Command {
 			return runServe(cmd.Context(), f)
 		},
 	}
-	root.PersistentFlags().BoolVar(&f.dev, "dev", false, "modo desarrollo: Postgres embebido en ~/.local/share/rampa/pg (puerto 54329; binarios cacheados en ~/.embedded-postgres-go), RAMPA_DEV_LOGIN=true y un secreto de sesión fijo")
+	root.PersistentFlags().BoolVar(&f.dev, "dev", false, "modo desarrollo: Postgres embebido en ~/.local/share/rampa/pg (puerto 54329; binarios cacheados en ~/.embedded-postgres-go), RAMPA_DEV_LOGIN=true, un secreto de sesión fijo y una clave de estado de OpenTofu fija")
 	root.PersistentFlags().StringVar(&f.logLevel, "log-level", "info", "nivel de log: debug, info, warn, error")
 
 	serve := &cobra.Command{
@@ -138,6 +141,7 @@ func setupDev(log *slog.Logger) (func(), error) {
 	setDefault("RAMPA_DATABASE_URL", fmt.Sprintf("postgres://rampa:rampa@127.0.0.1:%d/%s?sslmode=disable", devPGPort, devPGDBName))
 	_ = os.Setenv("RAMPA_DEV_LOGIN", "true")
 	setDefault("RAMPA_SESSION_SECRET", devSessionSecret)
+	setDefault("RAMPA_STATE_KEY", devStateKey)
 	return func() {
 		if err := pg.Stop(); err != nil {
 			log.Warn("apagando el Postgres embebido", "err", err)

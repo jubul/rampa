@@ -281,8 +281,10 @@ type clusterResponse struct {
 // installCommand arma el helm install listo para pegar. Las claves api.url,
 // cluster.token, image.repository e image.tag son las de charts/rampa-agent/values.yaml.
 // image.* van con --set-string: un tag numérico como 20240101 con --set sería
-// un entero y values.schema.json lo rechaza porque exige string.
-func (a *API) installCommand(token string) string {
+// un entero y values.schema.json lo rechaza porque exige string. Si el cluster
+// tiene agent_role_arn, se anota el ServiceAccount con IRSA (los puntos de la
+// clave van escapados para que Helm no los tome como separadores).
+func (a *API) installCommand(token, agentRoleARN string) string {
 	cmd := fmt.Sprintf("helm upgrade --install rampa-agent %s --namespace rampa-system --create-namespace --set api.url=%s --set cluster.token=%s",
 		a.Config.ChartRepo, a.Config.PublicURL, token)
 	if repo, tag := splitImage(a.Config.AgentImage); repo != "" {
@@ -290,6 +292,9 @@ func (a *API) installCommand(token string) string {
 		if tag != "" {
 			cmd += " --set-string image.tag=" + tag
 		}
+	}
+	if arn := strings.TrimSpace(agentRoleARN); arn != "" {
+		cmd += ` --set-string 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=` + strings.ReplaceAll(arn, "'", `'''`) + `'`
 	}
 	return cmd
 }
@@ -317,6 +322,7 @@ func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
 		Domain         string `json:"domain"`
 		IngressClass   string `json:"ingress_class"`
 		SecretStore    string `json:"secret_store"`
+		AgentRoleARN   string `json:"agent_role_arn"`
 	}
 	if err := decode(r, &body); err != nil {
 		a.fail(w, r, err, "")
@@ -329,6 +335,11 @@ func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Env != store.EnvProd && body.Env != store.EnvNonprod {
 		a.fail(w, r, invalid("env debe ser nonprod o prod"), "")
+		return
+	}
+	body.AgentRoleARN = strings.TrimSpace(body.AgentRoleARN)
+	if body.AgentRoleARN != "" && !strings.HasPrefix(body.AgentRoleARN, "arn:") {
+		a.fail(w, r, invalid("agent_role_arn debe ser el ARN del rol IAM del agente (arn:aws:iam::...:role/...)"), "")
 		return
 	}
 	if err := requireString("cloud_account_id", body.CloudAccountID); err != nil {
@@ -360,14 +371,14 @@ func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	cl, err := a.Store.CreateCluster(ctx, &store.Cluster{
 		OrgID: oc.Org.ID, CloudAccountID: acc.ID, Name: body.Name, Env: body.Env, TokenHash: hash,
-		Domain: body.Domain, IngressClass: body.IngressClass, SecretStore: body.SecretStore,
+		Domain: body.Domain, IngressClass: body.IngressClass, SecretStore: body.SecretStore, AgentRoleARN: body.AgentRoleARN,
 	})
 	if err != nil {
 		a.fail(w, r, err, "cluster "+body.Name)
 		return
 	}
 	a.Bus.Emit(ctx, oc.Org.ID, principal(r).Actor(), "cluster.created", "cluster", cl.ID, "cluster "+cl.Name+" ("+cl.Env+") creado", map[string]string{"name": cl.Name, "env": cl.Env, "domain": cl.Domain})
-	writeJSON(w, http.StatusCreated, clusterResponse{Cluster: cl, Token: plain, InstallCommand: a.installCommand(plain)})
+	writeJSON(w, http.StatusCreated, clusterResponse{Cluster: cl, Token: plain, InstallCommand: a.installCommand(plain, cl.AgentRoleARN)})
 }
 
 func defaultSecretStore(providerKind string) string {
@@ -443,5 +454,5 @@ func (a *API) rotateClusterToken(w http.ResponseWriter, r *http.Request) {
 	// el anterior deje de operar ahora y no cuando el agente decida reconectar.
 	a.Hub.Disconnect(cl.ID, "el token del cluster fue rotado")
 	a.Bus.Emit(ctx, oc.Org.ID, principal(r).Actor(), "cluster.token_rotated", "cluster", cl.ID, "token del cluster "+cl.Name+" rotado; el anterior ya no vale", nil)
-	writeJSON(w, http.StatusOK, clusterResponse{Cluster: cl, Token: plain, InstallCommand: a.installCommand(plain)})
+	writeJSON(w, http.StatusOK, clusterResponse{Cluster: cl, Token: plain, InstallCommand: a.installCommand(plain, cl.AgentRoleARN)})
 }

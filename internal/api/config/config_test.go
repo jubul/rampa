@@ -29,6 +29,74 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestInfraDefaultsAndStateKey(t *testing.T) {
+	base := func() map[string]string {
+		return map[string]string{
+			"RAMPA_DATABASE_URL":   "postgres://u:p@localhost/db",
+			"RAMPA_SESSION_SECRET": strings.Repeat("s", 32),
+		}
+	}
+	c, err := Load(env(base()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TofuBin != "tofu" || c.InfraTimeout != 40*time.Minute || c.InfraConcurrency != 2 || c.InfraWorkdir == "" {
+		t.Errorf("defaults de infra: %+v", c)
+	}
+	if c.InfraEnabled() {
+		t.Error("sin RAMPA_STATE_KEY infra debería estar deshabilitada")
+	}
+	warned := false
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "RAMPA_STATE_KEY") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("esperaba un aviso por la clave de estado vacía: %v", c.Warnings)
+	}
+
+	raw := strings.Repeat("ab", 32) // 32 bytes en hex
+	for name, key := range map[string]string{
+		"hex":        raw,
+		"base64":     "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
+		"base64 raw": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s",
+	} {
+		m := base()
+		m["RAMPA_STATE_KEY"] = key
+		m["RAMPA_TOFU_BIN"] = "/opt/tofu"
+		m["RAMPA_INFRA_TIMEOUT"] = "1h"
+		m["RAMPA_INFRA_CONCURRENCY"] = "4"
+		m["RAMPA_INFRA_WORKDIR"] = "/var/tmp"
+		c, err := Load(env(m))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !c.InfraEnabled() || len(c.StateKey) != 32 || c.TofuBin != "/opt/tofu" || c.InfraTimeout != time.Hour || c.InfraConcurrency != 4 || c.InfraWorkdir != "/var/tmp" {
+			t.Errorf("%s: %+v", name, c)
+		}
+	}
+	for name, key := range map[string]string{"corta": "abcd", "basura": "$$$", "31 bytes": strings.Repeat("ab", 31)} {
+		m := base()
+		m["RAMPA_STATE_KEY"] = key
+		if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "RAMPA_STATE_KEY") {
+			t.Errorf("clave %s debería fallar, tengo %v", name, err)
+		}
+	}
+	for name, extra := range map[string]map[string]string{
+		"timeout":     {"RAMPA_INFRA_TIMEOUT": "cuarenta"},
+		"concurrency": {"RAMPA_INFRA_CONCURRENCY": "0"},
+	} {
+		m := base()
+		for k, v := range extra {
+			m[k] = v
+		}
+		if _, err := Load(env(m)); err == nil {
+			t.Errorf("%s: esperaba error", name)
+		}
+	}
+}
+
 func TestLoadRequiresDatabase(t *testing.T) {
 	_, err := Load(env(map[string]string{"RAMPA_SESSION_SECRET": strings.Repeat("s", 32)}))
 	if err == nil || !strings.Contains(err.Error(), "RAMPA_DATABASE_URL") {

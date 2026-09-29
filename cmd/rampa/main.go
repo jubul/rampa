@@ -6,25 +6,18 @@
 package main
 
 import (
-	"embed"
-	"io/fs"
 	"os"
 
+	"rampa.dev/cmd/rampa/templates"
 	"rampa.dev/internal/cli"
 )
-
-//go:embed all:templates
-var templates embed.FS
 
 // version se inyecta en build con -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
-	sub, err := fs.Sub(templates, "templates")
-	if err != nil {
-		panic(err)
-	}
-	if err := cli.Execute(version, sub); err != nil {
+	// Los golden paths viven en cmd/rampa/templates y los comparte la API.
+	if err := cli.Execute(version, templates.FS); err != nil {
 		os.Exit(1)
 	}
 }

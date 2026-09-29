@@ -10,7 +10,7 @@ EXAMPLE    = examples/checkout-api/rampa.yaml
 IMAGE_REPO ?= ghcr.io/CHANGEME
 SCOPES     = dev staging prod pr-1
 
-.PHONY: help build api agent cli web test test-integration lint dev-api dev-web render smoke install docker clean
+.PHONY: lint-infra help build api agent cli web test test-integration lint dev-api dev-web render smoke install docker clean
 
 help:             ## Lista los targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -35,7 +35,7 @@ test:             ## go test ./... (RAMPA_TEST_SKIP_DB=1 salta los tests con Pos
 test-integration: ## Solo los tests de integración de la API (bajan un Postgres embebido la primera vez)
 	go test -count=1 -race -timeout 600s ./internal/api/server/
 
-lint: cli         ## gofmt, go vet, helm lint de ambos charts y typecheck de la web
+lint: cli lint-infra ## gofmt, go vet, helm lint de ambos charts, typecheck de la web e infra
 	test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: archivos sin formatear"; exit 1; }
 	go vet ./...
 	@for scope in $(SCOPES); do \
@@ -44,6 +44,17 @@ lint: cli         ## gofmt, go vet, helm lint de ambos charts y typecheck de la 
 	done
 	@for f in $(CHART_AGENT)/ci/*.yaml; do helm lint --strict $(CHART_AGENT) -f $$f || exit 1; done
 	cd web && npm run typecheck
+
+lint-infra:       ## tofu fmt y validate de los módulos, cfn-lint de las plantillas, actionlint de los workflows (si están instalados)
+	@for m in terraform/modules/*/*/; do \
+	  echo "== $$m"; \
+	  tofu -chdir=$$m fmt -check -diff || exit 1; \
+	  tofu -chdir=$$m init -backend=false -input=false >/dev/null || exit 1; \
+	  tofu -chdir=$$m validate || exit 1; \
+	  rm -rf $$m/.terraform $$m/.terraform.lock.hcl; \
+	done
+	@if command -v cfn-lint >/dev/null; then cfn-lint pkg/provider/aws/cloudformation/*.yaml && echo "cfn-lint ok"; else echo "cfn-lint no instalado, salto"; fi
+	@if command -v actionlint >/dev/null; then actionlint -no-color -shellcheck= .github/workflows/*.yml && echo "actionlint ok"; else echo "actionlint no instalado, salto"; fi
 
 dev-api:          ## Corre la API en modo dev (Postgres embebido, dev-login, :8080)
 	go run ./cmd/rampa-api serve --dev

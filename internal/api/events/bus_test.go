@@ -98,3 +98,22 @@ func TestSlowSubscriberDoesNotBlock(t *testing.T) {
 		t.Fatal("Publish bloqueó con un suscriptor lento")
 	}
 }
+
+func TestBroadcastDoesNotPersist(t *testing.T) {
+	p := &memPersister{}
+	b := New(p, nil)
+	sub := b.Subscribe("org-a", store.EventFilter{SubjectType: "infra_run", SubjectID: "r1"})
+	defer b.Unsubscribe(sub)
+	b.Broadcast("org-a", store.Actor{}, "infra_run.line", "infra_run", "r1", "", map[string]any{"run_id": "r1", "line": "hola"})
+	select {
+	case e := <-sub.C:
+		if e.Kind != "infra_run.line" || e.ID == "" || e.Actor.Type != "system" || e.CreatedAt.IsZero() {
+			t.Errorf("evento: %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("el suscriptor no recibió el broadcast")
+	}
+	if len(p.events) != 0 {
+		t.Errorf("Broadcast no debe persistir, hay %d eventos", len(p.events))
+	}
+}

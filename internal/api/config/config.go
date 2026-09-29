@@ -4,11 +4,13 @@ package config
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,6 +24,15 @@ const (
 	DefaultDeployTimeout = 10 * time.Minute
 	// MinSessionSecretBytes es el largo mínimo del secreto de sesión.
 	MinSessionSecretBytes = 32
+
+	// DefaultTofuBin es el binario de OpenTofu, buscado en el PATH.
+	DefaultTofuBin = "tofu"
+	// DefaultInfraTimeout es el máximo de un run de infraestructura.
+	DefaultInfraTimeout = 40 * time.Minute
+	// DefaultInfraConcurrency es cuántos runs corren a la vez.
+	DefaultInfraConcurrency = 2
+	// StateKeyBytes es el largo de la clave AES-256 del estado de OpenTofu.
+	StateKeyBytes = 32
 )
 
 // Config es la configuración del servidor.
@@ -41,9 +52,20 @@ type Config struct {
 	ChartRepo     string
 	DeployTimeout time.Duration
 
+	// Infraestructura con OpenTofu (docs/api.md, "Infraestructura con clicks").
+	TofuBin          string
+	StateKey         []byte // 32 bytes; vacío deshabilita infra
+	InfraWorkdir     string
+	InfraTimeout     time.Duration
+	InfraConcurrency int
+
 	// Warnings son avisos no fatales que se loguean al arrancar.
 	Warnings []string
 }
+
+// InfraEnabled dice si hay clave de estado: sin ella los endpoints de
+// infraestructura responden 501.
+func (c Config) InfraEnabled() bool { return len(c.StateKey) == StateKeyBytes }
 
 // OIDCEnabled dice si las tres variables de OIDC están configuradas.
 func (c Config) OIDCEnabled() bool {
@@ -76,6 +98,8 @@ func Load(getenv func(string) string) (Config, error) {
 		WebDir:           get("RAMPA_WEB_DIR", ""),
 		AgentImage:       get("RAMPA_AGENT_IMAGE", DefaultAgentImage),
 		ChartRepo:        get("RAMPA_CHART_REPO", DefaultChartRepo),
+		TofuBin:          get("RAMPA_TOFU_BIN", DefaultTofuBin),
+		InfraWorkdir:     get("RAMPA_INFRA_WORKDIR", os.TempDir()),
 	}
 
 	var errs []error
@@ -141,6 +165,33 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	if raw := get("RAMPA_STATE_KEY", ""); raw != "" {
+		key, err := ParseStateKey(raw)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("RAMPA_STATE_KEY inválida: %w", err))
+		} else {
+			c.StateKey = key
+		}
+	} else {
+		c.Warnings = append(c.Warnings, "RAMPA_STATE_KEY vacía: la infraestructura con OpenTofu queda deshabilitada (los endpoints /infra responden 501). Generá una con: openssl rand -base64 32")
+	}
+
+	infraTimeoutRaw := get("RAMPA_INFRA_TIMEOUT", DefaultInfraTimeout.String())
+	infraTimeout, err := time.ParseDuration(infraTimeoutRaw)
+	if err != nil || infraTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("RAMPA_INFRA_TIMEOUT %q inválido: se espera una duración como 40m", infraTimeoutRaw))
+	} else {
+		c.InfraTimeout = infraTimeout
+	}
+
+	concurrencyRaw := get("RAMPA_INFRA_CONCURRENCY", strconv.Itoa(DefaultInfraConcurrency))
+	concurrency, err := strconv.Atoi(concurrencyRaw)
+	if err != nil || concurrency < 1 || concurrency > 64 {
+		errs = append(errs, fmt.Errorf("RAMPA_INFRA_CONCURRENCY %q inválido: se espera un entero entre 1 y 64", concurrencyRaw))
+	} else {
+		c.InfraConcurrency = concurrency
+	}
+
 	if !c.DevLogin && !c.OIDCEnabled() {
 		c.Warnings = append(c.Warnings, "ni RAMPA_DEV_LOGIN ni OIDC están configurados: solo se puede entrar con tokens de API")
 	}
@@ -149,4 +200,31 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.Join(errs...)
 	}
 	return c, nil
+}
+
+// ParseStateKey decodifica una clave AES-256 escrita en base64 (estándar o
+// URL, con o sin padding) o en hex. Tiene que dar exactamente 32 bytes.
+func ParseStateKey(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("está vacía")
+	}
+	var candidates [][]byte
+	if b, err := hex.DecodeString(raw); err == nil {
+		candidates = append(candidates, b)
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(raw); err == nil {
+			candidates = append(candidates, b)
+		}
+	}
+	for _, b := range candidates {
+		if len(b) == StateKeyBytes {
+			return b, nil
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("no es base64 ni hex")
+	}
+	return nil, fmt.Errorf("decodifica a %d bytes; se necesitan exactamente %d (openssl rand -base64 32)", len(candidates[0]), StateKeyBytes)
 }

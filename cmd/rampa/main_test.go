@@ -1,11 +1,11 @@
 package main
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"rampa.dev/cmd/rampa/templates"
 	"rampa.dev/pkg/manifest"
 	"rampa.dev/pkg/scaffold"
 )
@@ -13,10 +13,7 @@ import (
 // TestScaffoldApiGo genera una app desde el golden path embebido y verifica
 // que el rampa.yaml resultante sea válido y que no queden delimitadores sin renderizar.
 func TestScaffoldApiGo(t *testing.T) {
-	sub, err := fs.Sub(templates, "templates")
-	if err != nil {
-		t.Fatal(err)
-	}
+	sub := templates.FS
 	dir := t.TempDir()
 	dest, err := scaffold.Run(sub, scaffold.Options{
 		Name: "demo-api", Team: "plataforma", Type: "api", Runtime: "go", Org: "acme", Port: 8080, Dir: dir,

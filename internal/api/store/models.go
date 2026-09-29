@@ -48,6 +48,9 @@ const (
 const (
 	ClusterOnline  = "online"
 	ClusterOffline = "offline"
+	// ClusterFailed es un cluster cuyo run de infraestructura falló: existe en
+	// Rampa con su infra_run_id para reintentar o borrar.
+	ClusterFailed = "failed"
 
 	CloudAccountPending   = "pending"
 	CloudAccountConnected = "connected"
@@ -60,9 +63,37 @@ const (
 	EnvNonprod = "nonprod"
 )
 
+// Estados de un run de infraestructura (docs/api.md): apply pasa por
+// queued, initializing, planning y applying hasta succeeded o failed; destroy
+// pasa por destroying hasta destroyed o failed.
+const (
+	InfraRunQueued       = "queued"
+	InfraRunInitializing = "initializing"
+	InfraRunPlanning     = "planning"
+	InfraRunApplying     = "applying"
+	InfraRunSucceeded    = "succeeded"
+	InfraRunFailed       = "failed"
+	InfraRunDestroying   = "destroying"
+	InfraRunDestroyed    = "destroyed"
+)
+
+// Operaciones de un run de infraestructura.
+const (
+	InfraOpApply   = "apply"
+	InfraOpDestroy = "destroy"
+)
+
+// Kinds de run de infraestructura.
+const (
+	InfraKindCluster = "cluster"
+)
+
 // OrgSettings son las políticas de una organización.
 type OrgSettings struct {
 	RequireApprovalProd bool `json:"require_approval_prod"`
+	// GitHubOrg es la organización de GitHub donde vive el fork o copia de
+	// rampa con los workflows reusables; va en los workflows del scaffold.
+	GitHubOrg string `json:"github_org,omitempty"`
 }
 
 // Organization es el cliente.
@@ -161,8 +192,63 @@ type Cluster struct {
 	Domain            string     `json:"domain"`
 	IngressClass      string     `json:"ingress_class"`
 	SecretStore       string     `json:"secret_store"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"-"`
+	// AgentRoleARN es la identidad de nube del agente (IRSA en AWS). La deja
+	// el run de infraestructura o la trae el cliente al registrar el cluster.
+	AgentRoleARN string `json:"agent_role_arn"`
+	// InfraRunID enlaza al run que creó (o intentó crear) el cluster.
+	InfraRunID string    `json:"infra_run_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"-"`
+}
+
+// InfraRun es una ejecución de OpenTofu contra la cuenta de un cliente.
+type InfraRun struct {
+	ID             string          `json:"id"`
+	OrgID          string          `json:"-"`
+	Kind           string          `json:"kind"`
+	Provider       string          `json:"provider"`
+	Module         string          `json:"module"`
+	CloudAccountID string          `json:"cloud_account_id"`
+	ClusterID      string          `json:"cluster_id"`
+	Name           string          `json:"name"`
+	Operation      string          `json:"operation"`
+	Status         string          `json:"status"`
+	Inputs         json.RawMessage `json:"inputs"`
+	Outputs        json.RawMessage `json:"outputs"`
+	Error          string          `json:"error"`
+	StateTokenHash string          `json:"-"`
+	RequestedBy    string          `json:"-"`
+	Attempt        int             `json:"attempt"`
+	LockedAt       *time.Time      `json:"-"`
+	StartedAt      *time.Time      `json:"started_at"`
+	FinishedAt     *time.Time      `json:"finished_at"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"-"`
+}
+
+// Terminal dice si el run ya no cambia.
+func (r *InfraRun) Terminal() bool {
+	switch r.Status {
+	case InfraRunSucceeded, InfraRunFailed, InfraRunDestroyed:
+		return true
+	}
+	return false
+}
+
+// InfraRunLog es una línea del log de un run.
+type InfraRunLog struct {
+	RunID     string    `json:"-"`
+	Seq       int       `json:"seq"`
+	Line      string    `json:"line"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// InfraState es el estado de OpenTofu de un run, cifrado, más el lock.
+type InfraState struct {
+	RunID      string
+	Ciphertext []byte
+	LockInfo   json.RawMessage // nil si no está tomado
+	UpdatedAt  time.Time
 }
 
 // Application es un rampa.yaml importado.

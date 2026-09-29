@@ -139,7 +139,7 @@ func TestInstallCommand(t *testing.T) {
 	a.Config.ChartRepo = "oci://x/charts/rampa-agent"
 	a.Config.PublicURL = "https://api.rampa.dev"
 	a.Config.AgentImage = "ghcr.io/acme/rampa-agent:1.2.3"
-	cmd := a.installCommand("rampa_cluster_abc")
+	cmd := a.installCommand("rampa_cluster_abc", "")
 	// Las claves son las de charts/rampa-agent/values.yaml: api.url, cluster.token, image.repository, image.tag.
 	// image.* con --set-string: un tag numérico con --set sería un entero y values.schema.json lo rechaza.
 	want := "helm upgrade --install rampa-agent oci://x/charts/rampa-agent --namespace rampa-system --create-namespace --set api.url=https://api.rampa.dev --set cluster.token=rampa_cluster_abc --set-string image.repository=ghcr.io/acme/rampa-agent --set-string image.tag=1.2.3"
@@ -147,12 +147,17 @@ func TestInstallCommand(t *testing.T) {
 		t.Errorf("install_command:\n%s\nquería:\n%s", cmd, want)
 	}
 	a.Config.AgentImage = "ghcr.io/acme/rampa-agent:20240101"
-	if got := a.installCommand("t"); !strings.Contains(got, "--set-string image.tag=20240101") || strings.Contains(got, "--set image.") {
+	if got := a.installCommand("t", ""); !strings.Contains(got, "--set-string image.tag=20240101") || strings.Contains(got, "--set image.") {
 		t.Errorf("un tag numérico tiene que ir con --set-string: %s", got)
 	}
 	a.Config.AgentImage = ""
-	if got := a.installCommand("t"); strings.Contains(got, "image.") {
+	if got := a.installCommand("t", ""); strings.Contains(got, "image.") {
 		t.Errorf("sin RAMPA_AGENT_IMAGE no debería haber --set image.*: %s", got)
+	}
+	// Con agent_role_arn se anota el ServiceAccount (IRSA), con los puntos escapados.
+	got := a.installCommand("t", "arn:aws:iam::123456789012:role/eks-rampa-agent")
+	if !strings.HasSuffix(got, ` --set-string 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/eks-rampa-agent'`) {
+		t.Errorf("install_command con agent_role_arn: %s", got)
 	}
 }
 

@@ -90,6 +90,31 @@ func (b *Bus) Emit(ctx context.Context, orgID string, actor store.Actor, kind, s
 	}
 }
 
+// Broadcast reparte un evento sin persistirlo. Es para señales de alto
+// volumen que solo interesan en vivo, como las líneas de log de un run de
+// infraestructura (infra_run.line): quedan en su propia tabla, no en events.
+func (b *Bus) Broadcast(orgID string, actor store.Actor, kind, subjectType, subjectID, message string, payload any) {
+	var raw json.RawMessage
+	if payload != nil {
+		bts, err := json.Marshal(payload)
+		if err != nil {
+			b.log.Warn("payload de evento no serializable", "kind", kind, "err", err)
+		} else {
+			raw = bts
+		}
+	}
+	if len(raw) == 0 {
+		raw = json.RawMessage("{}")
+	}
+	if actor.Type == "" {
+		actor.Type = "system"
+	}
+	b.fanout(&store.Event{
+		ID: uuid.NewString(), OrgID: orgID, Actor: actor, Kind: kind, SubjectType: subjectType, SubjectID: subjectID,
+		Message: message, Payload: raw, CreatedAt: time.Now().UTC(),
+	})
+}
+
 func (b *Bus) fanout(e *store.Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

@@ -1,7 +1,7 @@
 import { safeHttpUrl } from "../lib/url";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Check, ExternalLink, FileCode2, Link2, Rocket, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, Download, ExternalLink, FileCode2, Link2, Pencil, Rocket, Trash2, X } from "lucide-react";
 import {
   useApp,
   useAppDeployments,
@@ -25,6 +25,8 @@ import { errorMessage } from "../api/client";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Card, CardBody, CardHeader } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
+import { DownloadLink, LinkButton } from "../components/ui/LinkButton";
+import { CodeBlock } from "../components/ui/CodeBlock";
 import { Input, Textarea } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
 import { Field } from "../components/ui/Field";
@@ -35,6 +37,7 @@ import { Table, TBody, TD, TH, THead, TR } from "../components/ui/Table";
 import { StatusBadge } from "../components/StatusBadge";
 import { EventList } from "../components/EventList";
 import { TierBadge } from "./AppsPage";
+import { scaffoldUrl } from "../api/client";
 import { formatDateTime, formatRelative, shortId, shortImage } from "../lib/format";
 
 export function AppDetailPage() {
@@ -82,6 +85,7 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
   const [bindScope, setBindScope] = useState<Scope | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<Scope | null>(null);
   const [manifestOpen, setManifestOpen] = useState(false);
+  const [tab, setTab] = useState<"general" | "yaml">("general");
   const [deleteAppOpen, setDeleteAppOpen] = useState(false);
   const [actingOn, setActingOn] = useState<string | null>(null);
 
@@ -114,8 +118,17 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
         description={application.description || `${application.type} en ${application.runtime}`}
         actions={
           <>
+            {isDeveloper ? (
+              <LinkButton to={`/o/${org}/apps/${app}/edit`} icon={<Pencil className="size-4" />}>
+                Editar
+              </LinkButton>
+            ) : (
+              <Button disabled title="Necesitás rol developer" icon={<Pencil className="size-4" />}>
+                Editar
+              </Button>
+            )}
             <Button variant="secondary" disabled={!isDeveloper} icon={<FileCode2 className="size-4" />} onClick={() => setManifestOpen(true)}>
-              Manifest
+              Editar YAML
             </Button>
             <Button variant="ghost" disabled={!isDeveloper} icon={<Trash2 className="size-4 text-red-600" />} onClick={() => setDeleteAppOpen(true)}>
               Eliminar
@@ -149,6 +162,30 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
         </CardBody>
       </Card>
 
+      <div className="mt-6 flex gap-1 border-b border-slate-200" role="tablist" aria-label="Secciones de la aplicación">
+        {([["general", "General"], ["yaml", "YAML"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === key ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "yaml" && (
+        <Card className="mt-6">
+          <CardHeader title="rampa.yaml" description="El manifest guardado, en solo lectura. Para cambiarlo usá Editar (asistente) o Editar YAML." />
+          <CardBody>{application.manifest ? <CodeBlock value={application.manifest} maxHeight="36rem" /> : <EmptyState title="Sin manifest" />}</CardBody>
+        </Card>
+      )}
+
+      {tab === "general" && (
+      <>
       <Card className="mt-6">
         <CardHeader title="Scopes" description="Cada scope es un namespace propio en un cluster." />
         {scopesQ.isPending ? (
@@ -375,6 +412,10 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
           )}
         </Card>
       </div>
+
+      <ScaffoldCard org={org} application={application} githubOrg={orgQ.data?.settings.github_org ?? ""} />
+      </>
+      )}
 
       <DeployDialog
         org={org}
@@ -617,5 +658,36 @@ function ManifestForm({ org, app, current, onClose }: { org: string; app: string
         </Button>
       </div>
     </form>
+  );
+}
+
+function ScaffoldCard({ org, application, githubOrg }: { org: string; application: Application; githubOrg: string }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? githubOrg;
+  const supported = application.type === "api" && application.runtime === "go";
+  return (
+    <Card className="mt-6">
+      <CardHeader title="Proyecto inicial" description="Código de partida del golden path, con el rampa.yaml real de esta app y los workflows de CI." />
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Organización de GitHub" help="Donde vive tu copia de rampa. Si la dejás vacía se usa la de la organización, o CHANGEME.">
+            {(id) => <Input id={id} className="w-64" value={value} placeholder="acme" onChange={(e) => setDraft(e.target.value)} />}
+          </Field>
+          <div className="pb-6">
+            <DownloadLink href={scaffoldUrl(org, application.name, value)} icon={<Download className="size-4" />}>
+              Descargar proyecto inicial
+            </DownloadLink>
+          </div>
+        </div>
+        {!supported && (
+          <Notice tone="amber">Hoy el proyecto inicial existe solo para apps de tipo api con runtime go. Esta app es {application.type} en {application.runtime || "sin runtime"}, así que la descarga puede fallar.</Notice>
+        )}
+        <ol className="list-inside list-decimal space-y-1 text-sm text-slate-700">
+          <li>Descomprimí el zip.</li>
+          <li>Creá un repositorio en GitHub con el código descomprimido y subilo.</li>
+          <li>Hacé push a main: el workflow construye la imagen y despliega a dev.</li>
+        </ol>
+      </CardBody>
+    </Card>
   );
 }

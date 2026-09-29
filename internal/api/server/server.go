@@ -20,6 +20,7 @@ import (
 	"rampa.dev/internal/api/events"
 	"rampa.dev/internal/api/httpapi"
 	"rampa.dev/internal/api/hub"
+	"rampa.dev/internal/api/infra"
 	"rampa.dev/internal/api/store"
 	"rampa.dev/pkg/provider/aws"
 )
@@ -35,6 +36,7 @@ type Server struct {
 	hub     *hub.Hub
 	backend *hub.StoreBackend
 	bus     *events.Bus
+	infra   *infra.Service
 	handler http.Handler
 }
 
@@ -93,8 +95,18 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, version strin
 	backend := hub.NewStoreBackend(st, bus, log.With("component", "hub"))
 	h := hub.New(backend, log.With("component", "hub"), hub.Options{})
 
+	// Runner de OpenTofu. Si falta tofu o la clave de estado queda "no listo"
+	// y los endpoints /infra responden 501 explicando qué falta.
+	runner := infra.New(infra.Config{
+		TofuBin: cfg.TofuBin, StateKey: cfg.StateKey, Workdir: cfg.InfraWorkdir, Timeout: cfg.InfraTimeout,
+		Concurrency: cfg.InfraConcurrency, PublicURL: cfg.PublicURL, AgentImage: cfg.AgentImage,
+	}, st, bus, log.With("component", "infra"))
+	if err := runner.Ready(); err != nil {
+		log.Warn(err.Error())
+	}
+
 	api := httpapi.New(httpapi.Deps{
-		Store: st, Auth: authn, Sessions: sessions, OIDC: oidc, Bus: bus, Hub: h, Pipeline: pipeline,
+		Store: st, Auth: authn, Sessions: sessions, OIDC: oidc, Bus: bus, Hub: h, Pipeline: pipeline, Infra: runner,
 		Config: cfg, Log: log.With("component", "http"), Version: version,
 	})
 
@@ -118,7 +130,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, version strin
 		}
 	})
 
-	return &Server{cfg: cfg, log: log, store: st, hub: h, backend: backend, bus: bus, handler: root}, nil
+	return &Server{cfg: cfg, log: log, store: st, hub: h, backend: backend, bus: bus, infra: runner, handler: root}, nil
 }
 
 // serveCloudFormation entrega la plantilla embebida en pkg/provider/aws.
@@ -194,6 +206,9 @@ func (s *Server) Hub() *hub.Hub { return s.hub }
 // Backend expone el backend del hub (para tests del reaper).
 func (s *Server) Backend() *hub.StoreBackend { return s.backend }
 
+// Infra expone el runner de infraestructura (para tests).
+func (s *Server) Infra() *infra.Service { return s.infra }
+
 // Run escucha en cfg.Listen hasta que ctx se cancela y apaga con gracia.
 func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{
@@ -206,6 +221,8 @@ func (s *Server) Run(ctx context.Context) error {
 	// Reaper: cierra como failed los comandos sent o acked cuyo result nunca
 	// llegó, para que ningún deployment quede en applying para siempre.
 	go s.backend.RunReaper(ctx, ReaperInterval, s.cfg.DeployTimeout, ReaperGrace)
+	// Runner de infraestructura: recupera runs huérfanos y procesa la cola.
+	go s.infra.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

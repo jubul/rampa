@@ -96,21 +96,46 @@ func (s *Store) DeleteCloudAccount(ctx context.Context, orgID, id string) error 
 
 // ---- clusters ----
 
-const clusterColumns = "id, org_id, cloud_account_id, name, env, token_hash, agent_version, k8s_version, last_seen_at, status, domain, ingress_class, secret_store, created_at, updated_at"
+const clusterColumns = "id, org_id, cloud_account_id, name, env, token_hash, agent_version, k8s_version, last_seen_at, status, domain, ingress_class, secret_store, agent_role_arn, infra_run_id, created_at, updated_at"
 
 func scanCluster(row interface{ Scan(dest ...any) error }) (*Cluster, error) {
 	var c Cluster
-	if err := row.Scan(&c.ID, &c.OrgID, &c.CloudAccountID, &c.Name, &c.Env, &c.TokenHash, &c.AgentVersion, &c.KubernetesVersion, &c.LastSeenAt, &c.Status, &c.Domain, &c.IngressClass, &c.SecretStore, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	var infraRunID *string
+	if err := row.Scan(&c.ID, &c.OrgID, &c.CloudAccountID, &c.Name, &c.Env, &c.TokenHash, &c.AgentVersion, &c.KubernetesVersion, &c.LastSeenAt, &c.Status, &c.Domain, &c.IngressClass, &c.SecretStore, &c.AgentRoleARN, &infraRunID, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, translate(err)
 	}
+	c.InfraRunID = ptrString(infraRunID)
 	return &c, nil
 }
 
-// CreateCluster crea el cluster con su token ya hasheado.
+// CreateCluster crea el cluster con su token ya hasheado. Si c.ID viene
+// seteado se respeta (el run de infraestructura lo necesita antes de insertar).
 func (s *Store) CreateCluster(ctx context.Context, c *Cluster) (*Cluster, error) {
-	return scanCluster(s.db.QueryRow(ctx, `INSERT INTO clusters (id, org_id, cloud_account_id, name, env, token_hash, domain, ingress_class, secret_store, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING `+clusterColumns,
-		uuid.NewString(), c.OrgID, c.CloudAccountID, c.Name, c.Env, c.TokenHash, c.Domain, c.IngressClass, c.SecretStore, ClusterOffline))
+	id := c.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
+	return scanCluster(s.db.QueryRow(ctx, `INSERT INTO clusters (id, org_id, cloud_account_id, name, env, token_hash, domain, ingress_class, secret_store, status, agent_role_arn, infra_run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING `+clusterColumns,
+		id, c.OrgID, c.CloudAccountID, c.Name, c.Env, c.TokenHash, c.Domain, c.IngressClass, c.SecretStore, ClusterOffline, c.AgentRoleARN, nullString(c.InfraRunID)))
+}
+
+// SetClusterInfraRun enlaza el cluster con el run que lo crea.
+func (s *Store) SetClusterInfraRun(ctx context.Context, orgID, id, runID string) error {
+	_, err := s.db.Exec(ctx, `UPDATE clusters SET infra_run_id = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, orgID, id, nullString(runID))
+	return translate(err)
+}
+
+// SetClusterInfraResult guarda lo que dejó el run: el rol del agente (si no
+// está vacío) y el estado (failed cuando el run falló, offline cuando terminó
+// bien y el agente todavía no se conectó). Nunca pisa un cluster online.
+func (s *Store) SetClusterInfraResult(ctx context.Context, orgID, id, agentRoleARN, status string) error {
+	_, err := s.db.Exec(ctx, `UPDATE clusters SET
+		agent_role_arn = CASE WHEN $3 = '' THEN agent_role_arn ELSE $3 END,
+		status = CASE WHEN status = $5 THEN status ELSE $4 END,
+		updated_at = now()
+		WHERE org_id = $1 AND id = $2`, orgID, id, agentRoleARN, status, ClusterOnline)
+	return translate(err)
 }
 
 // GetCluster busca un cluster de la org.
@@ -167,9 +192,10 @@ func (s *Store) SetClusterOffline(ctx context.Context, orgID, id string) error {
 	return translate(err)
 }
 
-// MarkAllClustersOffline se usa al arrancar: ninguna conexión sobrevive un reinicio.
+// MarkAllClustersOffline se usa al arrancar: ninguna conexión sobrevive un
+// reinicio. Los clusters en failed (run de infraestructura fallido) se quedan así.
 func (s *Store) MarkAllClustersOffline(ctx context.Context) error {
-	_, err := s.db.Exec(ctx, `UPDATE clusters SET status = $1, updated_at = now() WHERE status <> $1`, ClusterOffline)
+	_, err := s.db.Exec(ctx, `UPDATE clusters SET status = $1, updated_at = now() WHERE status = $2`, ClusterOffline, ClusterOnline)
 	return translate(err)
 }
 

@@ -157,19 +157,27 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	return newTestEnvWith(t, nil)
+}
+
+// newTestEnvWith arma el entorno con variables extra (o pisadas) de configuración.
+func newTestEnvWith(t *testing.T, extra map[string]string) *testEnv {
+	t.Helper()
 	dbURL := startPostgres(t)
 	provider.Register(fakeProvider{})
 
-	cfg, err := config.Load(func(k string) string {
-		return map[string]string{
-			"RAMPA_DATABASE_URL":   dbURL,
-			"RAMPA_SESSION_SECRET": strings.Repeat("t", 40),
-			"RAMPA_DEV_LOGIN":      "true",
-			"RAMPA_PUBLIC_URL":     "http://api.test.local",
-			"RAMPA_CHART_REPO":     "oci://ghcr.io/acme/charts/rampa-agent",
-			"RAMPA_DEPLOY_TIMEOUT": "3m",
-		}[k]
-	})
+	vars := map[string]string{
+		"RAMPA_DATABASE_URL":   dbURL,
+		"RAMPA_SESSION_SECRET": strings.Repeat("t", 40),
+		"RAMPA_DEV_LOGIN":      "true",
+		"RAMPA_PUBLIC_URL":     "http://api.test.local",
+		"RAMPA_CHART_REPO":     "oci://ghcr.io/acme/charts/rampa-agent",
+		"RAMPA_DEPLOY_TIMEOUT": "3m",
+	}
+	for k, v := range extra {
+		vars[k] = v
+	}
+	cfg, err := config.Load(func(k string) string { return vars[k] })
 	if err != nil {
 		t.Fatal(err)
 	}

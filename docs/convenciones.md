@@ -11,7 +11,6 @@ Nombres y rutas que todas las piezas de Rampa comparten. Cambiar algo acá impli
 | Scope efímero | `pr-<número de PR>` | `pr-142` |
 | Namespace | `<app>-<scope>` | `checkout-api-pr-142` |
 | Recursos de Kubernetes | `<app>` dentro del namespace | Deployment `checkout-api` |
-| Application de Argo CD | `<app>-<scope>` | `checkout-api-prod` |
 | Repositorio ECR | `rampa/<app>` | `rampa/checkout-api` |
 | Tag de imagen | `sha-<7 chars del commit>` | `sha-a1b2c3d` |
 | URL por defecto | `<app>-<scope>.<dominio del cluster>` | `checkout-api-dev.apps.example.internal` |
@@ -48,23 +47,9 @@ Claves del JSON por tipo de service:
 - `s3`: `bucket`, `arn`
 - `dynamodb`: `table`, `arn`
 
-## `rampa-deploys`
+## Modo GitOps legado (`rampa-deploys`)
 
-```
-apps/
-  <app>/
-    <scope>/
-      values.yaml      # generado por `rampa render`, más la imagen. No se edita a mano.
-argocd/
-  applicationset-nonprod.yaml
-  applicationset-prod.yaml
-```
-
-Reglas:
-
-- `dev` y `pr-*`: el workflow commitea directo a `main`.
-- `staging` y `prod`: el workflow abre un PR. Alguien del equipo owner aprueba.
-- Borrar el directorio de un scope borra el scope. Argo CD tiene `prune` activado.
+El flujo principal es la API: `rampa deploy` y la web registran deployments que el agente aplica. El repo `rampa-deploys` con Argo CD quedó como modo legado para quien lo exija, con el CLI en `--deploys-repo`. Sus convenciones: un directorio `apps/<app>/<scope>/values.yaml` por scope vivo, generado por `rampa render`, y ApplicationSets de Argo CD por entorno. No recibe funcionalidades nuevas.
 
 ## Identidad AWS
 
