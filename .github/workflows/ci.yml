@@ -15,8 +15,8 @@ jobs:
     name: Go (CLI, API, agente)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -39,7 +39,7 @@ jobs:
           go build -o bin/rampa ./cmd/rampa
           go build -o bin/rampa-api ./cmd/rampa-api
           CGO_ENABLED=0 go build -o bin/rampa-agent ./cmd/rampa-agent
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rampa-cli
           path: bin/rampa
@@ -50,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: go
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - uses: actions/download-artifact@v8
         with:
           name: rampa-cli
           path: bin
@@ -80,8 +80,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -96,12 +96,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: rampa-cli
           path: bin
@@ -125,6 +125,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [go, web]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -f cmd/rampa-api/Dockerfile -t rampa-api:ci .
       - run: docker build -f cmd/rampa-agent/Dockerfile -t rampa-agent:ci .

@@ -43,10 +43,10 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Credenciales AWS por OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.RAMPA_AWS_BUILD_ROLE_ARN }}
           aws-region: ${{ vars.RAMPA_AWS_REGION }}
@@ -76,10 +76,10 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY}/rampa/${{ inputs.app }}:${tag}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build y push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
@@ -95,7 +95,7 @@ jobs:
 
       - name: Escaneo de vulnerabilidades
         if: inputs.scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.image }}
           severity: CRITICAL

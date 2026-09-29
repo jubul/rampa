@@ -49,14 +49,14 @@ jobs:
       # Si el repo de la plataforma es privado y vive en otra organización, github.token no
       # puede leerlo: hay que pasar RAMPA_PLATFORM_TOKEN. Sin él se usa github.token.
       - name: Checkout de la plataforma
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.PLATFORM_REPO }}
           token: ${{ secrets.RAMPA_PLATFORM_TOKEN || github.token }}
           ref: ${{ inputs.platform-ref }}
           path: platform
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: platform/go.mod
           cache-dependency-path: platform/go.sum
