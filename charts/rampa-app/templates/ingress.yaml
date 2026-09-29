@@ -1,0 +1,34 @@
+{{- if and (include "rampa.isWeb" .) .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+  annotations:
+    {{- if and .Values.ingress.tls .Values.cluster.tlsIssuer }}
+    cert-manager.io/cluster-issuer: {{ .Values.cluster.tlsIssuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.cluster.ingressClass }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ include "rampa.host" . | quote }}
+      secretName: {{ include "rampa.name" . }}-tls
+  {{- end }}
+  rules:
+    - host: {{ include "rampa.host" . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "rampa.name" . }}
+                port:
+                  name: http
+{{- end }}

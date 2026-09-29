@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Values del chart rampa-agent",
+  "type": "object",
+  "required": ["api", "cluster", "image", "replicaCount", "serviceAccount", "rbac", "secretStore"],
+  "properties": {
+    "api": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "api.url es requerido: URL publica del plano de control, por ejemplo https://api.rampa.dev",
+          "minLength": 1,
+          "pattern": "^https?://[^\\s/]+"
+        }
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "description": "Hace falta cluster.token o cluster.existingSecret",
+      "properties": {
+        "token": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "secretKey": { "type": "string", "minLength": 1 }
+      },
+      "anyOf": [
+        {
+          "required": ["token"],
+          "properties": { "token": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "required": ["existingSecret"],
+          "properties": { "existingSecret": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "replicaCount": {
+      "type": "integer",
+      "description": "Un agente por cluster: replicaCount tiene que ser 1",
+      "const": 1
+    },
+    "serviceAccount": {
+      "type": "object",
+      "required": ["create", "name"],
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "required": ["create"],
+      "properties": { "create": { "type": "boolean" } }
+    },
+    "resources": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+    "extraEnv": { "type": "array" },
+    "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "priorityClassName": { "type": "string" },
+    "healthPort": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+    "shutdownGraceSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
+    "secretStore": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "name": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "enum": ["aws", "gcp", "azure"] },
+        "aws": {
+          "type": "object",
+          "properties": { "region": { "type": "string" } }
+        },
+        "gcp": {
+          "type": "object",
+          "properties": {
+            "projectID": { "type": "string" },
+            "clusterLocation": { "type": "string" },
+            "clusterName": { "type": "string" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "properties": {
+            "vaultURL": { "type": "string" },
+            "tenantID": { "type": "string" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "enabled": { "const": true }, "provider": { "const": "aws" } }, "required": ["provider"] },
+          "then": {
+            "required": ["aws"],
+            "properties": {
+              "aws": {
+                "required": ["region"],
+                "properties": { "region": { "minLength": 1, "description": "secretStore.aws.region es requerido con provider aws" } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "enabled": { "const": true }, "provider": { "const": "gcp" } }, "required": ["provider"] },
+          "then": {
+            "required": ["gcp"],
+            "properties": {
+              "gcp": {
+                "required": ["projectID", "clusterLocation", "clusterName"],
+                "properties": {
+                  "projectID": { "minLength": 1 },
+                  "clusterLocation": { "minLength": 1 },
+                  "clusterName": { "minLength": 1 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "enabled": { "const": true }, "provider": { "const": "azure" } }, "required": ["provider"] },
+          "then": {
+            "required": ["azure"],
+            "properties": {
+              "azure": {
+                "required": ["vaultURL", "tenantID"],
+                "properties": {
+                  "vaultURL": { "minLength": 1, "pattern": "^https://" },
+                  "tenantID": { "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

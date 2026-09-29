@@ -1,0 +1,130 @@
+# CI de la plataforma: CLI, API, agente, charts, web y golden paths se prueban
+# juntos porque se rompen juntos.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (CLI, API, agente)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: gofmt y go mod tidy sin diferencias
+        run: |
+          gofmt -l . | tee /tmp/gofmt.txt
+          test ! -s /tmp/gofmt.txt
+          cp go.mod /tmp/go.mod && cp go.sum /tmp/go.sum
+          go mod tidy
+          diff -u /tmp/go.mod go.mod && diff -u /tmp/go.sum go.sum
+      - name: go build y go vet
+        run: |
+          go build ./...
+          go vet ./...
+      - name: go test (incluye la integración de la API con Postgres embebido)
+        run: go test -count=1 -race -timeout 900s ./...
+      - name: Binarios
+        run: |
+          mkdir -p bin
+          go build -o bin/rampa ./cmd/rampa
+          go build -o bin/rampa-api ./cmd/rampa-api
+          CGO_ENABLED=0 go build -o bin/rampa-agent ./cmd/rampa-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rampa-cli
+          path: bin/rampa
+          retention-days: 1
+
+  charts:
+    name: Helm (rampa-app, rampa-agent)
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rampa-cli
+          path: bin
+      - name: rampa-app contra la app de ejemplo
+        run: |
+          chmod +x bin/rampa
+          for scope in dev staging prod pr-1; do
+            bin/rampa render -f examples/checkout-api/rampa.yaml --scope "$scope" --image sha-0000000 > "/tmp/values-$scope.yaml"
+            helm lint --strict charts/rampa-app -f "/tmp/values-$scope.yaml"
+            helm template checkout-api charts/rampa-app -f "/tmp/values-$scope.yaml" > "/tmp/manifests-$scope.yaml"
+            echo "== $scope: $(grep -c '^kind:' /tmp/manifests-$scope.yaml) recursos"
+          done
+      - name: rampa-agent con cada values de ci/
+        run: |
+          for f in charts/rampa-agent/ci/*.yaml; do
+            echo "== $f"
+            helm lint --strict charts/rampa-agent -f "$f"
+            helm template rampa-agent charts/rampa-agent -n rampa-system -f "$f" > /dev/null
+          done
+
+  web:
+    name: Web (typecheck, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  golden-path:
+    name: Golden path api-go de punta a punta
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: rampa-cli
+          path: bin
+      - run: |
+          chmod +x bin/rampa
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+      - run: |
+          cd "$RUNNER_TEMP"
+          rampa init --name smoke-api --team plataforma --github-org acme
+          cd smoke-api
+          rampa validate
+          go vet ./... && go test ./...
+          docker build -t smoke-api:ci .
+          docker run -d --rm -p 8080:8080 --name smoke smoke-api:ci
+          sleep 2
+          curl -fsS localhost:8080/health
+          docker stop smoke
+
+  images:
+    name: Imágenes Docker (api, agente)
+    runs-on: ubuntu-latest
+    needs: [go, web]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f cmd/rampa-api/Dockerfile -t rampa-api:ci .
+      - run: docker build -f cmd/rampa-agent/Dockerfile -t rampa-agent:ci .

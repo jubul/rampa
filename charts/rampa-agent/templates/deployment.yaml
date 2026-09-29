@@ -1,0 +1,134 @@
+{{- include "rampa-agent.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rampa-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rampa-agent.labels" . | nindent 4 }}
+spec:
+  # Un agente por cluster. Ver el comentario de replicaCount en values.yaml.
+  replicas: 1
+  revisionHistoryLimit: 3
+  # Recreate: el agente viejo se apaga antes de que arranque el nuevo, así nunca
+  # hay dos conexiones con el mismo token al plano de control.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "rampa-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rampa-agent.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if not .Values.cluster.existingSecret }}
+        # Reinicia el pod cuando cambia el token (rotación con helm upgrade).
+        rampa.dev/token-hash: {{ .Values.cluster.token | sha256sum | trunc 16 | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "rampa-agent.serviceAccountName" . }}
+      # El agente usa la identidad del SA para hablar con la API de Kubernetes.
+      automountServiceAccountToken: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      # El agente termina los comandos en curso durante shutdownGraceSeconds antes
+      # de cerrar. Kubernetes tiene que darle ese tiempo más un margen para salir.
+      terminationGracePeriodSeconds: {{ add (int .Values.shutdownGraceSeconds) 15 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: {{ include "rampa-agent.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            privileged: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: RAMPA_API_URL
+              value: {{ .Values.api.url | quote }}
+            - name: RAMPA_CLUSTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rampa-agent.tokenSecretName" . }}
+                  key: {{ .Values.cluster.secretKey | default "token" }}
+            - name: RAMPA_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: RAMPA_HEALTH_ADDR
+              value: {{ printf ":%d" (int .Values.healthPort) | quote }}
+            - name: RAMPA_SHUTDOWN_GRACE
+              value: {{ printf "%ds" (int .Values.shutdownGraceSeconds) | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: {{ int .Values.healthPort }}
+              protocol: TCP
+          # /healthz responde mientras el proceso viva. /readyz solo cuando la
+          # conexión con el plano de control está establecida.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # Con readOnlyRootFilesystem el agente necesita un lugar escribible
+            # para archivos temporales (por ejemplo el workdir de tofu en la Fase C).
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

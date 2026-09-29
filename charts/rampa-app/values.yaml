@@ -1,0 +1,90 @@
+# Values del chart rampa-app.
+# En la práctica los genera `rampa render` a partir del rampa.yaml de la app.
+# Este archivo documenta el esquema y fija los defaults de plataforma.
+
+app:
+  name: ""            # requerido. metadata.name del rampa.yaml
+  team: ""            # requerido. metadata.team
+  tier: 2
+  type: api           # api | worker | cron | static
+  runtime: ""
+
+scope:
+  name: ""            # requerido. dev | staging | prod | pr-<n>
+  ephemeral: false
+  ttl: ""             # solo informativo, lo usa el limpiador de scopes efímeros
+
+image:
+  repository: ""      # requerido
+  tag: ""             # requerido
+  pullPolicy: IfNotPresent
+
+port: 8080            # api y static
+healthcheck: /health  # api. static usa /
+schedule: ""          # cron, formato crontab
+
+replicas: 1
+size: S               # ver `sizes`
+strategy: rolling     # rolling | canary | bluegreen. canary y bluegreen requieren Argo Rollouts
+
+autoscaling:
+  enabled: false
+  min: 1
+  max: 3
+  cpu: 70             # porcentaje de utilización objetivo
+
+ingress:
+  enabled: true       # se ignora en worker y cron
+  host: ""            # vacío: <app>-<scope>.<cluster.domain>
+  annotations: {}
+  tls: true
+
+env: []               # [{name, value}] parameters planos
+secrets: []           # [{name, remoteKey, property?}] parameters desde Secrets Manager
+
+cluster:
+  domain: apps.example.internal
+  ingressClass: nginx
+  secretStore: aws-secrets-manager   # nombre del ClusterSecretStore de External Secrets
+  tlsIssuer: letsencrypt             # ClusterIssuer de cert-manager. Vacío para no anotar
+
+aws:
+  roleArn: ""         # rol IAM para IRSA. Vacío: sin anotación
+
+sizes:
+  S:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+  M:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 1Gi }
+  L:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits:   { cpu: 2000m, memory: 2Gi }
+  XL:
+    requests: { cpu: 1000m, memory: 1Gi }
+    limits:   { cpu: 4000m, memory: 4Gi }
+
+# Cuota dura del namespace en scopes efímeros. Guardrail de costo.
+ephemeralQuota:
+  pods: "10"
+  requests.cpu: "2"
+  requests.memory: "4Gi"
+
+canary:
+  steps:
+    - setWeight: 10
+    - pause: { duration: 5m }
+    - setWeight: 50
+    - pause: { duration: 5m }
+
+bluegreen:
+  autoPromotionEnabled: false
+
+podAnnotations: {}
+terminationGracePeriodSeconds: 30
+
+# Salidas de emergencia. Si las usás, avisale a plataforma para que el chart lo absorba.
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

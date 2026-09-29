@@ -1,0 +1,5 @@
+# Instalación mínima: lo que la web pega en el comando de instalación.
+api:
+  url: https://api.rampa.dev
+cluster:
+  token: rampa_cluster_ci_0000000000000000000000000000

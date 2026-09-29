@@ -1,0 +1,149 @@
+# Despliega una imagen a un scope llamando a la API de Rampa.
+#   dev y pr-*        se aplican al instante.
+#   staging y prod    igual, salvo que la org exija aprobación para prod: en ese caso
+#                     el deployment queda en awaiting_approval y `--wait` espera a que
+#                     un admin lo apruebe desde la web (o vence el timeout).
+#
+# Ya no se clona rampa-deploys ni se usa Argo CD: el CLI hace POST .../deployments y,
+# con --wait, sigue el stream de eventos hasta healthy (exit 0) o failed (exit 1).
+#
+# Configuración que espera en la organización o el repo de la app:
+#   vars.RAMPA_API_URL     URL de la API (ej. https://api.rampa.dev)
+#   vars.RAMPA_ORG         slug de la organización en Rampa
+#   secrets.RAMPA_TOKEN    token de API con rol developer (admin para prod). Se pasa con `secrets: inherit`.
+#   secrets.RAMPA_PLATFORM_TOKEN (opcional) lectura del repo de la plataforma, si es privado y de otra organización.
+name: reusable-deploy
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Nombre de la application (metadata.name del rampa.yaml)
+        required: true
+        type: string
+      scope:
+        description: dev | staging | prod | pr-<n>
+        required: true
+        type: string
+      image:
+        description: Referencia completa o tag de la imagen
+        required: true
+        type: string
+      wait:
+        description: Esperar a que el deployment quede healthy
+        type: boolean
+        default: true
+      timeout:
+        description: Cuánto esperar con wait (formato de Go, ej. 15m)
+        type: string
+        default: 15m
+      platform-repo:
+        description: owner/repo de la plataforma (para compilar el CLI). Default <owner>/rampa
+        type: string
+        default: ""
+      platform-ref:
+        description: ref del repo de la plataforma
+        type: string
+        default: main
+    secrets:
+      RAMPA_TOKEN:
+        description: Token de API de Rampa
+        required: true
+      RAMPA_PLATFORM_TOKEN:
+        description: >-
+          Token (PAT o de GitHub App) con lectura sobre el repo de la plataforma. Hace falta si
+          el repo rampa es privado y está en otra organización que la app. Si falta, se usa github.token.
+        required: false
+    outputs:
+      url:
+        value: ${{ jobs.deploy.outputs.url }}
+      namespace:
+        value: ${{ jobs.deploy.outputs.namespace }}
+      deployment_id:
+        value: ${{ jobs.deploy.outputs.deployment_id }}
+      status:
+        value: ${{ jobs.deploy.outputs.status }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: rampa-deploy-${{ inputs.app }}-${{ inputs.scope }}
+      cancel-in-progress: false
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      namespace: ${{ steps.deploy.outputs.namespace }}
+      deployment_id: ${{ steps.deploy.outputs.deployment_id }}
+      status: ${{ steps.deploy.outputs.status }}
+    env:
+      PLATFORM_REPO: ${{ inputs.platform-repo != '' && inputs.platform-repo || format('{0}/rampa', github.repository_owner) }}
+    steps:
+      - name: Checkout de la app (rampa.yaml)
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      # Si el repo de la plataforma es privado y vive en otra organización, github.token no
+      # puede leerlo: hay que pasar RAMPA_PLATFORM_TOKEN. Sin él se usa github.token.
+      - name: Checkout de la plataforma
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PLATFORM_REPO }}
+          token: ${{ secrets.RAMPA_PLATFORM_TOKEN || github.token }}
+          ref: ${{ inputs.platform-ref }}
+          path: platform
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+
+      - name: Compilar rampa
+        working-directory: platform
+        run: |
+          go build -ldflags "-X main.version=$(git rev-parse --short HEAD)" -o "$RUNNER_TEMP/rampa" ./cmd/rampa
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Verificar configuración
+        env:
+          RAMPA_API: ${{ vars.RAMPA_API_URL }}
+          RAMPA_ORG: ${{ vars.RAMPA_ORG }}
+          RAMPA_TOKEN: ${{ secrets.RAMPA_TOKEN }}
+        run: |
+          fail=0
+          [ -n "$RAMPA_API" ]   || { echo "::error::Falta la variable RAMPA_API_URL (Settings > Variables)"; fail=1; }
+          [ -n "$RAMPA_ORG" ]   || { echo "::error::Falta la variable RAMPA_ORG"; fail=1; }
+          [ -n "$RAMPA_TOKEN" ] || { echo "::error::Falta el secret RAMPA_TOKEN"; fail=1; }
+          exit $fail
+
+      - name: rampa deploy
+        id: deploy
+        working-directory: app
+        env:
+          RAMPA_API: ${{ vars.RAMPA_API_URL }}
+          RAMPA_ORG: ${{ vars.RAMPA_ORG }}
+          RAMPA_TOKEN: ${{ secrets.RAMPA_TOKEN }}
+          APP: ${{ inputs.app }}
+          SCOPE: ${{ inputs.scope }}
+          IMAGE: ${{ inputs.image }}
+          TIMEOUT: ${{ inputs.timeout }}
+          MESSAGE: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          args=(--app "$APP" --scope "$SCOPE" --image "$IMAGE" --timeout "$TIMEOUT" -m "$MESSAGE")
+          if [ "${{ inputs.wait }}" = "true" ]; then args+=(--wait); fi
+          rampa deploy "${args[@]}"
+
+      - name: Comentar la URL en el PR de la app
+        if: startsWith(inputs.scope, 'pr-') && github.event_name == 'pull_request' && steps.deploy.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.deploy.outputs.url }}
+          NS: ${{ steps.deploy.outputs.namespace }}
+          STATUS: ${{ steps.deploy.outputs.status }}
+        run: |
+          body="🛫 **Rampa** desplegó este PR en el scope \`${{ inputs.scope }}\`: ${URL} (namespace \`${NS}\`, estado \`${STATUS}\`). Se destruye al cerrar el PR."
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --edit-last --body "$body" \
+          || gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body "$body"

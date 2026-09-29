@@ -1,0 +1,25 @@
+# [[.Name]]
+
+Application de Rampa. Owner: equipo `[[.Team]]`.
+
+## Correr local
+
+```bash
+go run .
+curl localhost:[[.Port]]/health
+```
+
+## Deploy
+
+No hay nada que hacer. Push a `main` despliega a `dev`. Abrir un PR crea un scope efímero con su URL.
+
+Para promover a producción:
+
+```bash
+rampa login --api https://api.rampa.dev --token rampa_...   # una sola vez
+rampa deploy --scope prod --image sha-<commit> --wait
+```
+
+## Configuración
+
+Todo vive en [`rampa.yaml`](rampa.yaml): scopes, tamaños, parameters y services. Validalo con `rampa validate`.

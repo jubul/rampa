@@ -1,0 +1,11 @@
+Rampa desplegó {{ include "rampa.name" . }} en el scope {{ .Values.scope.name }}.
+
+  Namespace:  {{ include "rampa.namespace" . }}
+  Imagen:     {{ include "rampa.image" . }}
+  Tipo:       {{ .Values.app.type }} ({{ .Values.strategy }})
+{{- if and (include "rampa.isWeb" .) .Values.ingress.enabled }}
+  URL:        http{{ if .Values.ingress.tls }}s{{ end }}://{{ include "rampa.host" . }}
+{{- end }}
+{{- if .Values.scope.ephemeral }}
+  Efímero:    sí{{ with .Values.scope.ttl }}, TTL {{ . }}{{ end }}. Se destruye al cerrar el PR.
+{{- end }}

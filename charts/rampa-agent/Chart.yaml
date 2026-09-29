@@ -1,0 +1,16 @@
+apiVersion: v2
+name: rampa-agent
+description: El agente de Rampa. Corre en el cluster del cliente, abre una conexión saliente al plano de control y aplica lo que la API le manda. Un agente por cluster.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://rampa.dev
+sources:
+  - https://github.com/CHANGEME/rampa
+keywords: [rampa, platform, agent]
+maintainers:
+  - name: Rampa
+    email: hola@rampa.dev
+annotations:
+  rampa.dev/component: agent

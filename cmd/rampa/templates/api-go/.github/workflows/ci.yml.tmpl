@@ -1,0 +1,53 @@
+# Generado por `rampa init`. Testea, construye la imagen y despliega:
+#   push a main         -> scope dev
+#   pull request        -> scope pr-<n> (URL comentada en el PR)
+# Promover a prod: `rampa deploy --scope prod --image <tag> --wait` (requiere `rampa login`).
+# Necesita vars.RAMPA_API_URL, vars.RAMPA_ORG y secrets.RAMPA_TOKEN en la org o el repo (secrets: inherit).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./... && go test ./...
+
+  build:
+    needs: test
+    uses: [[.Org]]/rampa/.github/workflows/reusable-build.yml@main
+    with:
+      app: [[.Name]]
+
+  deploy-dev:
+    if: github.event_name == 'push'
+    needs: build
+    uses: [[.Org]]/rampa/.github/workflows/reusable-deploy.yml@main
+    with:
+      app: [[.Name]]
+      scope: dev
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit
+
+  deploy-pr:
+    if: github.event_name == 'pull_request'
+    needs: build
+    uses: [[.Org]]/rampa/.github/workflows/reusable-deploy.yml@main
+    with:
+      app: [[.Name]]
+      scope: pr-${{ github.event.pull_request.number }}
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit

@@ -1,0 +1,78 @@
+# Elimina un scope llamando a la API de Rampa: DELETE .../scopes/<scope>. El agente del
+# cluster borra el namespace <app>-<scope>. Pensado para pr-*. Para scopes permanentes
+# usá el CLI a mano con --force (requiere rol admin en la org).
+#
+# Configuración que espera:
+#   vars.RAMPA_API_URL, vars.RAMPA_ORG, secrets.RAMPA_TOKEN (se pasa con `secrets: inherit`).
+#   secrets.RAMPA_PLATFORM_TOKEN (opcional): lectura del repo de la plataforma, si es privado y de otra organización.
+name: reusable-undeploy
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Nombre de la application
+        required: true
+        type: string
+      scope:
+        description: Scope a eliminar (normalmente pr-<n>)
+        required: true
+        type: string
+      platform-repo:
+        description: owner/repo de la plataforma (para compilar el CLI). Default <owner>/rampa
+        type: string
+        default: ""
+      platform-ref:
+        type: string
+        default: main
+    secrets:
+      RAMPA_TOKEN:
+        description: Token de API de Rampa
+        required: true
+      RAMPA_PLATFORM_TOKEN:
+        description: >-
+          Token (PAT o de GitHub App) con lectura sobre el repo de la plataforma. Hace falta si
+          el repo rampa es privado y está en otra organización que la app. Si falta, se usa github.token.
+        required: false
+
+jobs:
+  undeploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: rampa-deploy-${{ inputs.app }}-${{ inputs.scope }}
+      cancel-in-progress: false
+    env:
+      PLATFORM_REPO: ${{ inputs.platform-repo != '' && inputs.platform-repo || format('{0}/rampa', github.repository_owner) }}
+    steps:
+      # Si el repo de la plataforma es privado y vive en otra organización, github.token no
+      # puede leerlo: hay que pasar RAMPA_PLATFORM_TOKEN. Sin él se usa github.token.
+      - name: Checkout de la plataforma
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PLATFORM_REPO }}
+          token: ${{ secrets.RAMPA_PLATFORM_TOKEN || github.token }}
+          ref: ${{ inputs.platform-ref }}
+          path: platform
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+
+      - name: Compilar rampa
+        working-directory: platform
+        run: go build -o "$RUNNER_TEMP/rampa" ./cmd/rampa && echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: rampa undeploy
+        env:
+          RAMPA_API: ${{ vars.RAMPA_API_URL }}
+          RAMPA_ORG: ${{ vars.RAMPA_ORG }}
+          RAMPA_TOKEN: ${{ secrets.RAMPA_TOKEN }}
+          APP: ${{ inputs.app }}
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          [ -n "$RAMPA_API" ] && [ -n "$RAMPA_ORG" ] && [ -n "$RAMPA_TOKEN" ] \
+            || { echo "::error::Faltan RAMPA_API_URL, RAMPA_ORG (vars) o RAMPA_TOKEN (secret)"; exit 1; }
+          rampa undeploy --app "$APP" --scope "$SCOPE"

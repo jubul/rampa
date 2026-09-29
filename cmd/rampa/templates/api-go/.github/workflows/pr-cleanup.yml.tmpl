@@ -1,0 +1,17 @@
+# Generado por `rampa init`. Al cerrar un PR destruye su scope efímero vía la API de Rampa.
+name: pr-cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  undeploy:
+    uses: [[.Org]]/rampa/.github/workflows/reusable-undeploy.yml@main
+    with:
+      app: [[.Name]]
+      scope: pr-${{ github.event.pull_request.number }}
+    secrets: inherit

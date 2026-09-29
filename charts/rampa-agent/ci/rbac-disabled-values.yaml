@@ -1,0 +1,10 @@
+# El cliente provee su propio ServiceAccount y RBAC; el chart solo instala el Deployment y el Secret.
+api:
+  url: https://api.rampa.dev
+cluster:
+  token: rampa_cluster_ci_0000000000000000000000000000
+serviceAccount:
+  create: false
+  name: rampa-agent-propio
+rbac:
+  create: false

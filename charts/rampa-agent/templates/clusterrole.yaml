@@ -1,0 +1,94 @@
+{{- if .Values.rbac.create }}
+# Permisos del agente de Rampa. Son amplios a propósito: el agente es el brazo
+# del plano de control dentro del cluster y crea o borra namespaces completos
+# (un scope de una app es un namespace <app>-<scope>). Cada bloque explica para
+# qué se usa. La lista razonada también está en docs/instalar-agente.md.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rampa-agent.fullname" . }}
+  labels:
+    {{- include "rampa-agent.labels" . | nindent 4 }}
+rules:
+  # Namespaces: cada scope vive en su propio namespace. Deploy crea el namespace
+  # si no existe y le pone labels; undeploy lo borra completo.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # Deployments: el workload de las apps con strategy rolling (api, worker, static).
+  # Se aplican con server-side apply y se observan hasta que estén sanos.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # ReplicaSets: solo lectura. Sirven para identificar la revisión nueva de un
+  # Deployment y observar solo sus pods durante el rollout, así un pod viejo en
+  # CrashLoopBackOff no hace fallar el deploy que lo arregla.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+
+  # Rollouts de Argo Rollouts: el workload cuando la strategy es canary o bluegreen.
+  # Si el cluster no tiene Argo Rollouts instalado, la regla no molesta.
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # CronJobs: las apps de tipo cron. Jobs: los que genera el CronJob (para
+  # observar su estado y limpiar) y, en la Fase C, los Jobs de OpenTofu que
+  # provisionan services.
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # Objetos de namespace que genera el chart rampa-app para cada scope:
+  # Service (tráfico), ServiceAccount (identidad de nube por app) y
+  # ResourceQuota (cuota de los scopes efímeros). Se crean, actualizan y
+  # borran junto con el deploy (prune de lo que ya no está en el render).
+  - apiGroups: [""]
+    resources: [services, serviceaccounts, resourcequotas]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # Pods y sus logs: solo lectura. Para saber por qué un rollout no avanza
+  # (ImagePullBackOff, CrashLoopBackOff) y para el comando "logs" que hace
+  # tail de un pod hacia la web. El agente nunca crea ni borra pods.
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+
+  # Nodos: solo listar, para contar cuántos hay en el heartbeat. Es informativo:
+  # si se quita la regla el agente reporta nodes: 0 y sigue funcionando.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+
+  # Eventos de Kubernetes: solo lectura. Se reenvían al plano de control como
+  # detalle de un deploy (FailedScheduling, Unhealthy, etc.).
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch]
+
+  # Ingress: la URL de cada scope (<app>-<scope>.<dominio del cluster> o el domain propio).
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # HPA: autoscaling declarado en el rampa.yaml del scope.
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # PDB: se genera cuando un scope tiene más de una réplica.
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # External Secrets: ExternalSecret trae los parameters secretos de cada app
+  # desde el secret manager de la nube; ClusterSecretStore es el que instala
+  # este chart (secretStore.enabled) y el agente puede reconciliar. Si el
+  # cluster no tiene ESO instalado, la regla no molesta.
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets, clustersecretstores]
+    verbs: [get, list, watch, create, update, patch, delete]
+{{- end }}

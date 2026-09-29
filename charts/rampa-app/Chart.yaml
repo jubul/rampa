@@ -1,0 +1,8 @@
+apiVersion: v2
+name: rampa-app
+description: El chart único de Rampa. Toda application se despliega con este chart; los values los genera `rampa render` desde el rampa.yaml de la app.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [rampa, platform]

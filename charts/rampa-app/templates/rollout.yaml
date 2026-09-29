@@ -1,0 +1,33 @@
+{{- if include "rampa.useRollout" . }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "rampa.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- if eq .Values.strategy "canary" }}
+    canary:
+      maxSurge: 25%
+      maxUnavailable: 0
+      steps:
+        {{- toYaml .Values.canary.steps | nindent 8 }}
+    {{- else if eq .Values.strategy "bluegreen" }}
+    blueGreen:
+      activeService: {{ include "rampa.name" . }}
+      previewService: {{ include "rampa.name" . }}-preview
+      autoPromotionEnabled: {{ .Values.bluegreen.autoPromotionEnabled }}
+    {{- else }}
+    {{- fail (printf "strategy %q no existe. Opciones: rolling, canary, bluegreen" .Values.strategy) }}
+    {{- end }}
+  template:
+    {{- include "rampa.podTemplate" . | nindent 4 }}
+{{- end }}

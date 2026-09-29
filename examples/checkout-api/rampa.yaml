@@ -1,0 +1,58 @@
+# Application de referencia. La CI de la plataforma renderiza todos sus scopes contra el chart.
+apiVersion: rampa.dev/v1
+kind: Application
+metadata:
+  name: checkout-api
+  team: payments
+  tier: 2
+  description: API de checkout, ejemplo de referencia de Rampa
+
+spec:
+  type: api
+  runtime: go
+  port: 8080
+  healthcheck: /health
+
+  scopes:
+    dev:
+      size: S
+      replicas: 1
+    staging:
+      size: S
+      replicas: 2
+    prod:
+      size: M
+      replicas: 3
+      strategy: canary
+      domain: checkout.example.com
+      autoscaling:
+        min: 3
+        max: 10
+        cpu: 70
+    pr:
+      size: S
+      replicas: 1
+      ttl: 72h
+
+  parameters:
+    - name: LOG_LEVEL
+      value: info
+    - name: LOG_LEVEL
+      value: debug
+      scopes: [dev, pr]
+    - name: MAX_ITEMS
+      value: 50
+    - name: API_KEY
+      secret: true
+    - name: DB_URL
+      fromService: checkout-db
+      key: url
+    - name: DB_URL
+      value: postgres://app:app@postgres.checkout-api-dev.svc:5432/checkout
+      scopes: [dev, pr]
+
+  services:
+    - name: checkout-db
+      type: postgres
+      size: S
+      scopes: [staging, prod]

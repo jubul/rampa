@@ -1,0 +1,18 @@
+{{- if eq .Values.app.type "cron" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  schedule: {{ required "schedule es requerido para type cron" .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        {{- include "rampa.podTemplate" . | nindent 8 }}
+{{- end }}

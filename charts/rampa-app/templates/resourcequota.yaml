@@ -1,0 +1,13 @@
+{{- if .Values.scope.ephemeral }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "rampa.name" . }}-quota
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- range $k, $v := .Values.ephemeralQuota }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+{{- end }}

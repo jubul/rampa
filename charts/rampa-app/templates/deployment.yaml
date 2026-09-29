@@ -1,0 +1,23 @@
+{{- if and (include "rampa.isWorkload" .) (not (include "rampa.useRollout" .)) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "rampa.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  template:
+    {{- include "rampa.podTemplate" . | nindent 4 }}
+{{- end }}

@@ -1,0 +1,44 @@
+# Contrato con Rampa. Docs: docs/modelo.md en el repo rampa.
+apiVersion: rampa.dev/v1
+kind: Application
+metadata:
+  name: [[.Name]]
+  team: [[.Team]]
+  tier: 3                      # 1 crítico, 2 importante, 3 interno
+  description: TODO en una línea
+
+spec:
+  type: [[.Type]]
+  runtime: [[.Runtime]]
+  port: [[.Port]]
+  healthcheck: /health
+
+  scopes:
+    dev:
+      size: S
+      replicas: 1
+    prod:
+      size: S
+      replicas: 2
+      strategy: rolling        # rolling | canary | bluegreen
+    pr:                        # plantilla de los scopes efímeros por pull request
+      size: S
+      replicas: 1
+      ttl: 72h
+
+  parameters:
+    - name: LOG_LEVEL
+      value: info
+    - name: LOG_LEVEL
+      value: debug
+      scopes: [dev, pr]
+    # - name: API_KEY
+    #   secret: true           # Secrets Manager: rampa/[[.Name]]/<scope>/API_KEY
+    # - name: DB_URL
+    #   fromService: [[.Name]]-db
+    #   key: url
+
+  services: []
+    # - name: [[.Name]]-db
+    #   type: postgres
+    #   size: S

@@ -1,0 +1,35 @@
+El agente de Rampa quedó instalado en el namespace {{ .Release.Namespace }}.
+
+  Release:         {{ .Release.Name }}
+  Plano de control: {{ .Values.api.url }}
+  Imagen:          {{ include "rampa-agent.image" . }}
+  ServiceAccount:  {{ include "rampa-agent.serviceAccountName" . }}
+  Token:           Secret {{ include "rampa-agent.tokenSecretName" . }} (clave {{ .Values.cluster.secretKey | default "token" }})
+{{- if .Values.secretStore.enabled }}
+  SecretStore:     ClusterSecretStore/{{ .Values.secretStore.name }} ({{ .Values.secretStore.provider }}). Requiere External Secrets Operator.
+{{- end }}
+
+1. Verificá que el pod está corriendo y listo (READY 1/1):
+
+     kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Mirá los logs. Tiene que aparecer una línea de conexión aceptada por el
+   plano de control (welcome) con el nombre del cluster y de la organización:
+
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "rampa-agent.fullname" . }} -f
+
+   Si ves "unauthorized", el token no es válido o fue rotado: generá uno nuevo
+   desde la web y hacé helm upgrade con el nuevo cluster.token.
+   Si ves errores de red, revisá que el cluster tenga salida HTTPS hacia
+   {{ .Values.api.url }} (no hace falta abrir ningún puerto de entrada).
+
+3. En la web de Rampa, el cluster tiene que aparecer como "online" en menos de
+   un minuto. Si sigue "offline", el agente no logró conectar: los logs del
+   paso 2 dicen por qué.
+{{- if not .Values.serviceAccount.annotations }}
+
+Aviso: el ServiceAccount no tiene anotaciones de identidad de nube. Sin IRSA,
+Workload Identity o Azure Workload Identity el agente puede desplegar apps
+pero no leer secretos del secret manager ni provisionar services.
+Ver docs/instalar-agente.md para darle identidad.
+{{- end }}

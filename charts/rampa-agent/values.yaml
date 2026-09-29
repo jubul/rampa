@@ -1,0 +1,130 @@
+# Values del chart rampa-agent.
+#
+# Lo mínimo para instalar es api.url y cluster.token (o cluster.existingSecret).
+# La web genera el comando de instalación completo al crear el cluster.
+# Todo lo demás tiene defaults razonables para producción.
+
+api:
+  # URL pública del plano de control de Rampa. Requerido.
+  # El agente abre una conexión WebSocket saliente a <url>/v1/agent/connect.
+  # No hace falta abrir puertos de entrada en el cluster.
+  url: ""
+
+cluster:
+  # Token del cluster, tal como lo entrega la web al crear el cluster
+  # (empieza con rampa_cluster_). Se guarda en un Secret que crea este chart.
+  # Requerido salvo que se use existingSecret.
+  token: ""
+  # Nombre de un Secret ya existente en el namespace de instalación con la
+  # clave "token". Si se setea, el chart no crea ningún Secret y cluster.token
+  # se ignora. Útil si el token lo administra ESO, Vault, Sealed Secrets, etc.
+  existingSecret: ""
+  # Clave dentro del Secret (propio o existente) que contiene el token.
+  secretKey: token
+
+image:
+  repository: ghcr.io/CHANGEME/rampa-agent
+  # Vacío usa appVersion del Chart.yaml.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Secrets con credenciales para bajar la imagen, si el registry es privado.
+imagePullSecrets: []
+#  - name: ghcr-credentials
+
+# El agente es exactamente uno por cluster y no se escala. El plano de control
+# identifica al cluster por su token: dos réplicas con el mismo token se
+# pisarían los comandos y reportarían estado duplicado. Por eso replicaCount
+# está fijo en 1, el schema lo valida y la strategy del Deployment es Recreate
+# (nunca hay dos agentes vivos a la vez, ni durante un upgrade).
+replicaCount: 1
+
+serviceAccount:
+  # Crear el ServiceAccount. Si es false, tiene que existir uno con serviceAccount.name.
+  create: true
+  # Nombre del ServiceAccount. Es el que hay que referenciar al darle identidad
+  # de nube (IRSA, Workload Identity, Azure Workload Identity).
+  name: rampa-agent
+  # Anotaciones del ServiceAccount. Acá va la identidad de nube:
+  #   AWS (IRSA):      eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/rampa-agent
+  #   GCP (WI):        iam.gke.io/gcp-service-account: rampa-agent@mi-proyecto.iam.gserviceaccount.com
+  #   Azure (WI):      azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+  annotations: {}
+  # Labels extra del ServiceAccount. Azure Workload Identity exige
+  # azure.workload.identity/use: "true" en el pod (ver podLabels), no acá.
+  labels: {}
+
+rbac:
+  # Crear el ClusterRole y el ClusterRoleBinding. Si es false, el cliente los
+  # provee por su cuenta con los mismos permisos (ver templates/clusterrole.yaml).
+  create: true
+
+# El agente es liviano: mantiene un WebSocket, aplica objetos y observa rollouts.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Nivel de log del agente: debug, info, warn, error. Va a RAMPA_LOG_LEVEL.
+logLevel: info
+
+# Variables de entorno adicionales para el contenedor del agente.
+# Se agregan tal cual (formato de env de Kubernetes).
+extraEnv: []
+#  - name: HTTPS_PROXY
+#    value: http://proxy.interno:3128
+
+# Anotaciones y labels extra del Pod.
+podAnnotations: {}
+podLabels: {}
+#  azure.workload.identity/use: "true"
+
+# PriorityClass del pod. Recomendado system-cluster-critical o una propia alta:
+# si el agente se desaloja, el cluster aparece offline y no recibe deploys.
+priorityClassName: ""
+
+# Puerto HTTP interno del agente para /healthz y /readyz. No se expone con un Service.
+healthPort: 8081
+
+# Cuántos segundos espera el agente a que terminen los comandos en curso (y a
+# entregar sus resultados) cuando recibe SIGTERM. Va a RAMPA_SHUTDOWN_GRACE y el
+# terminationGracePeriodSeconds del pod se fija en este valor más 15.
+shutdownGraceSeconds: 30
+
+# ClusterSecretStore de External Secrets Operator hacia el secret manager de la
+# nube. Requiere tener instalado External Secrets Operator (ESO) en el cluster:
+# el chart solo renderiza el CRD ClusterSecretStore, no instala ESO.
+#
+# La autenticación es siempre por serviceAccountRef al ServiceAccount del
+# agente, así que la identidad de nube que se le dé al SA (IRSA, Workload
+# Identity) tiene que incluir permiso de lectura de secretos con prefijo
+# rampa/ en el secret manager correspondiente.
+secretStore:
+  enabled: false
+  # Nombre del ClusterSecretStore. Tiene que coincidir con el secret_store del
+  # cluster en la web (default aws-secrets-manager); la API lo usa al renderizar
+  # los ExternalSecret de las apps.
+  name: aws-secrets-manager
+  # aws | gcp | azure
+  provider: aws
+  aws:
+    # Región de AWS Secrets Manager. Requerido si provider es aws.
+    region: ""
+  gcp:
+    # Proyecto de GCP donde está Secret Manager. Requerido si provider es gcp.
+    projectID: ""
+    # Ubicación y nombre del cluster GKE. Los pide ESO para Workload Identity.
+    clusterLocation: ""
+    clusterName: ""
+  azure:
+    # URL del Key Vault, por ejemplo https://rampa-kv.vault.azure.net. Requerido si provider es azure.
+    vaultURL: ""
+    # Tenant de Entra ID. Requerido si provider es azure.
+    tenantID: ""

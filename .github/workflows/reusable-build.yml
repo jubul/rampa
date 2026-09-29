@@ -1,0 +1,103 @@
+# Construye la imagen de una application y la publica en ECR como rampa/<app>:sha-<commit>.
+# Las apps lo llaman con `uses: <org>/rampa/.github/workflows/reusable-build.yml@main`.
+#
+# Variables de organización que espera (Settings > Secrets and variables > Actions > Variables):
+#   RAMPA_AWS_REGION          región de ECR
+#   RAMPA_AWS_BUILD_ROLE_ARN  rol IAM asumible por OIDC con permisos de push a ECR
+name: reusable-build
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Nombre de la application (metadata.name del rampa.yaml)
+        required: true
+        type: string
+      context:
+        description: Contexto de docker build
+        type: string
+        default: "."
+      dockerfile:
+        description: Ruta al Dockerfile
+        type: string
+        default: Dockerfile
+      scan:
+        description: Falla si la imagen tiene CVEs críticas con fix
+        type: boolean
+        default: true
+    outputs:
+      image:
+        description: Referencia completa de la imagen publicada
+        value: ${{ jobs.build.outputs.image }}
+      tag:
+        description: Tag de la imagen (sha-<commit>)
+        value: ${{ jobs.build.outputs.tag }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Credenciales AWS por OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.RAMPA_AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ vars.RAMPA_AWS_REGION }}
+
+      - name: Login a ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Asegurar el repositorio ECR
+        env:
+          REPO: rampa/${{ inputs.app }}
+        run: |
+          if ! aws ecr describe-repositories --repository-names "$REPO" >/dev/null 2>&1; then
+            aws ecr create-repository \
+              --repository-name "$REPO" \
+              --image-scanning-configuration scanOnPush=true \
+              --image-tag-mutability IMMUTABLE \
+              --tags Key=rampa:app,Value=${{ inputs.app }}
+          fi
+
+      - name: Metadata de la imagen
+        id: meta
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          tag="sha-${GITHUB_SHA::7}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/rampa/${{ inputs.app }}:${tag}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build y push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            rampa.dev/app=${{ inputs.app }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Escaneo de vulnerabilidades
+        if: inputs.scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

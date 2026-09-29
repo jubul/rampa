@@ -1,0 +1,27 @@
+{{- if and (include "rampa.isWorkload" .) .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    {{- if include "rampa.useRollout" . }}
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    {{- else }}
+    apiVersion: apps/v1
+    kind: Deployment
+    {{- end }}
+    name: {{ include "rampa.name" . }}
+  minReplicas: {{ .Values.autoscaling.min }}
+  maxReplicas: {{ .Values.autoscaling.max }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.cpu }}
+{{- end }}

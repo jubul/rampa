@@ -1,0 +1,35 @@
+{{- if include "rampa.isWeb" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "rampa.selectorLabels" . | nindent 4 }}
+{{- if eq .Values.strategy "bluegreen" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rampa.name" . }}-preview
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "rampa.selectorLabels" . | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Rampa: rol IAM que el plano de control asume para operar en esta cuenta.
+  Permisos de minimo privilegio sobre ECR (repos rampa/*), EKS (solo lectura),
+  Secrets Manager (secretos rampa/*) y STS. No crea usuarios ni access keys.
+
+Parameters:
+  ExternalId:
+    Type: String
+    MinLength: 8
+    MaxLength: 1224
+    AllowedPattern: "[A-Za-z0-9+=,.@:/_-]+"
+    Description: >-
+      Identificador unico que genera Rampa para esta cuenta. Evita el problema
+      del "confused deputy": solo quien lo conoce puede asumir el rol.
+    NoEcho: true
+  TrustedPrincipalArn:
+    Type: String
+    AllowedPattern: "arn:aws[a-zA-Z-]*:iam::[0-9]{12}:(root|role/.+|user/.+)"
+    Description: >-
+      Identidad IAM del plano de control de Rampa que va a asumir el rol.
+      La completa Rampa; no la cambies.
+
+Resources:
+  RampaConnectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: "RampaConnect-${AWS::StackName}"
+      Description: Rol que asume el plano de control de Rampa con external ID
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: RampaControlPlaneAssumeRole
+            Effect: Allow
+            Principal:
+              AWS:
+                Ref: TrustedPrincipalArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId:
+                  Ref: ExternalId
+      Policies:
+        - PolicyName: RampaConnectLeastPrivilege
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Identity
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: "*"
+              - Sid: EcrRegistry
+                Effect: Allow
+                Action:
+                  - ecr:DescribeRegistry
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrRampaRepositories
+                Effect: Allow
+                Action:
+                  - ecr:DescribeRepositories
+                  - ecr:CreateRepository
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:TagResource
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/rampa/*"
+              - Sid: EksReadOnly
+                Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                  - eks:ListClusters
+                Resource: "*"
+              - Sid: SecretsManagerRampaSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:TagResource
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:rampa/*"
+      Tags:
+        - Key: rampa:managed
+          Value: "true"
+        - Key: rampa:purpose
+          Value: connect
+
+Outputs:
+  RoleArn:
+    Description: ARN del rol creado. Pegalo en Rampa para terminar la conexion.
+    Value:
+      Fn::GetAtt: [RampaConnectRole, Arn]
+  RoleName:
+    Description: Nombre del rol creado.
+    Value:
+      Ref: RampaConnectRole

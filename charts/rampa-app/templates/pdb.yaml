@@ -1,0 +1,14 @@
+{{- $min := ternary .Values.autoscaling.min .Values.replicas .Values.autoscaling.enabled }}
+{{- if and (include "rampa.isWorkload" .) (gt (int $min) 1) (not .Values.scope.ephemeral) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rampa.name" . }}
+  labels:
+    {{- include "rampa.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "rampa.selectorLabels" . | nindent 6 }}
+{{- end }}
