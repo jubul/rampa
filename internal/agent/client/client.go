@@ -285,7 +285,9 @@ func (c *Client) Run(ctx context.Context) error {
 // por fallidos los que sigan. Al volver, todos los results están entregados o
 // encolados sin conexión posible.
 func (c *Client) shutdown() {
+	c.inflightMu.Lock()
 	c.draining.Store(true)
+	c.inflightMu.Unlock()
 	grace := c.cfg.ShutdownGrace
 	c.log.Info("apagado pedido: no acepto comandos nuevos, espero los en curso", "grace", grace, "en_curso", len(c.InFlight()))
 	if c.WaitInflight(grace) {
@@ -576,29 +578,39 @@ func (c *Client) handleCommand(ctx context.Context, env protocol.Envelope) {
 		return
 	}
 
-	ack, err := protocol.NewEnvelope(protocol.KindAck, uuid.NewString(), cmd.ID, protocol.Ack{CommandID: cmd.ID})
-	if err == nil {
-		err = c.write(ctx, ack)
-	}
-	if err != nil {
-		log.Warn("no pude mandar el ack", "err", err)
-	}
-
 	if decodeErr != nil {
+		c.sendAck(ctx, log, cmd.ID)
 		c.finish(protocol.Result{CommandID: cmd.ID, Status: protocol.ResultRejected, Message: "payload del comando inválido: " + decodeErr.Error()})
 		return
 	}
 	ns, serialize, ok := commandNamespace(cmd)
 	if !ok {
+		c.sendAck(ctx, log, cmd.ID)
 		c.finish(protocol.Result{CommandID: cmd.ID, Status: protocol.ResultRejected, Message: fmt.Sprintf("comando %q no soportado o payload incompleto", cmd.Kind)})
 		return
 	}
-	if !c.markInflight(cmd.ID) {
+
+	// Reservar el lugar en curso ANTES del ack y bajo el mismo mutex que usa el
+	// apagado para marcar draining: así no existe la ventana en la que la API
+	// recibió el ack pero shutdown no ve el comando en curso y cierra sin darle
+	// un result.
+	c.inflightMu.Lock()
+	if c.draining.Load() {
+		c.inflightMu.Unlock()
+		log.Info("comando ignorado: el agente se está apagando")
+		return
+	}
+	if _, exists := c.inflight[cmd.ID]; exists {
+		c.inflightMu.Unlock()
+		c.sendAck(ctx, log, cmd.ID)
 		log.Info("comando repetido mientras sigue en curso; ack reenviado")
 		return
 	}
-
+	c.inflight[cmd.ID] = struct{}{}
 	c.wg.Add(1)
+	c.inflightMu.Unlock()
+	c.sendAck(ctx, log, cmd.ID)
+
 	go func() {
 		defer c.wg.Done()
 		defer c.unmarkInflight(cmd.ID)
@@ -623,6 +635,18 @@ func (c *Client) handleCommand(ctx context.Context, env protocol.Envelope) {
 		log.Info("comando terminado", "status", res.Status, "message", res.Message)
 		c.finish(res)
 	}()
+}
+
+// sendAck confirma a la API que el comando llegó. Si falla se loguea y se
+// sigue: la API reenvía los comandos sin ack al reconectar.
+func (c *Client) sendAck(ctx context.Context, log *slog.Logger, id string) {
+	ack, err := protocol.NewEnvelope(protocol.KindAck, uuid.NewString(), id, protocol.Ack{CommandID: id})
+	if err == nil {
+		err = c.write(ctx, ack)
+	}
+	if err != nil {
+		log.Warn("no pude mandar el ack", "err", err)
+	}
 }
 
 // commandNamespace devuelve el namespace del comando y si hay que serializarlo
