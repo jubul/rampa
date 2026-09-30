@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "./Button";
 import { cn } from "../../lib/cn";
+import { useTranslation } from "react-i18next";
 
 interface CopyFieldProps {
   value: string;
@@ -39,6 +40,7 @@ export async function copyText(text: string): Promise<boolean> {
 
 /** Valor de solo lectura con botón Copiar. Monoespaciado, pensado para comandos y tokens. */
 export function CopyField({ value, label, multiline = false, className, secret = false }: CopyFieldProps) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState<"idle" | "ok" | "fail">("idle");
   const [revealed, setRevealed] = useState(!secret);
 
@@ -52,30 +54,30 @@ export function CopyField({ value, label, multiline = false, className, secret =
 
   return (
     <div className={cn("space-y-1", className)}>
-      {label && <div className="text-xs font-medium text-slate-600">{label}</div>}
+      {label && <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{label}</div>}
       <div className="flex items-start gap-2">
         {multiline ? (
-          <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs leading-relaxed text-slate-800">
+          <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2 font-mono text-xs leading-relaxed text-slate-800 dark:text-slate-100">
             {shown}
           </pre>
         ) : (
-          <code className="min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-800">
+          <code className="min-w-0 flex-1 truncate rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 px-3 py-2 font-mono text-xs text-slate-800 dark:text-slate-100">
             {shown}
           </code>
         )}
         {secret && (
           <Button variant="secondary" size="sm" onClick={() => setRevealed((v) => !v)}>
-            {revealed ? "Ocultar" : "Mostrar"}
+            {revealed ? t("common.hide") : t("common.show")}
           </Button>
         )}
         <Button
           variant="secondary"
           size="sm"
           onClick={async () => setCopied((await copyText(value)) ? "ok" : "fail")}
-          icon={copied === "ok" ? <Check className="size-3.5 text-green-600" /> : <Copy className="size-3.5" />}
-          aria-label="Copiar"
+          icon={copied === "ok" ? <Check className="size-3.5 text-green-600 dark:text-green-400" /> : <Copy className="size-3.5" />}
+          aria-label={t("common.copy")}
         >
-          {copied === "ok" ? "Copiado" : copied === "fail" ? "No se pudo" : "Copiar"}
+          {copied === "ok" ? t("common.copied") : copied === "fail" ? t("common.copyFailed") : t("common.copy")}
         </Button>
       </div>
     </div>

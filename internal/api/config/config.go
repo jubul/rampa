@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -58,6 +59,11 @@ type Config struct {
 	InfraWorkdir     string
 	InfraTimeout     time.Duration
 	InfraConcurrency int
+
+	// TrustedProxies son los CIDRs de los proxies inversos delante de la API
+	// (RAMPA_TRUSTED_PROXIES). Solo desde ellos se honran X-Forwarded-For y
+	// X-Real-IP; vacío significa que la IP del cliente es siempre la del socket.
+	TrustedProxies []netip.Prefix
 
 	// Warnings son avisos no fatales que se loguean al arrancar.
 	Warnings []string
@@ -192,6 +198,15 @@ func Load(getenv func(string) string) (Config, error) {
 		c.InfraConcurrency = concurrency
 	}
 
+	if raw := get("RAMPA_TRUSTED_PROXIES", ""); raw != "" {
+		prefixes, err := ParseTrustedProxies(raw)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("RAMPA_TRUSTED_PROXIES inválida: %w", err))
+		} else {
+			c.TrustedProxies = prefixes
+		}
+	}
+
 	if !c.DevLogin && !c.OIDCEnabled() {
 		c.Warnings = append(c.Warnings, "ni RAMPA_DEV_LOGIN ni OIDC están configurados: solo se puede entrar con tokens de API")
 	}
@@ -200,6 +215,29 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.Join(errs...)
 	}
 	return c, nil
+}
+
+// ParseTrustedProxies parsea una lista de CIDRs separados por coma. Una IP
+// suelta vale como /32 (o /128). Las entradas vacías se ignoran.
+func ParseTrustedProxies(raw string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(part); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(part)
+		if err != nil {
+			return nil, fmt.Errorf("%q no es un CIDR ni una IP", part)
+		}
+		addr = addr.Unmap()
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
 }
 
 // ParseStateKey decodifica una clave AES-256 escrita en base64 (estándar o

@@ -4,7 +4,11 @@ El agente de Rampa quedó instalado en el namespace {{ .Release.Namespace }}.
   Plano de control: {{ .Values.api.url }}
   Imagen:          {{ include "rampa-agent.image" . }}
   ServiceAccount:  {{ include "rampa-agent.serviceAccountName" . }}
+{{- if .Values.cluster.bootstrapToken }}
+  Token:           por bootstrap. El agente lo guarda en el Secret {{ include "rampa-agent.agentTokenSecretName" . }} (clave token)
+{{- else }}
   Token:           Secret {{ include "rampa-agent.tokenSecretName" . }} (clave {{ .Values.cluster.secretKey | default "token" }})
+{{- end }}
 {{- if .Values.secretStore.enabled }}
   SecretStore:     ClusterSecretStore/{{ .Values.secretStore.name }} ({{ .Values.secretStore.provider }}). Requiere External Secrets Operator.
 {{- end }}
@@ -26,6 +30,32 @@ El agente de Rampa quedó instalado en el namespace {{ .Release.Namespace }}.
 3. En la web de Rampa, el cluster tiene que aparecer como "online" en menos de
    un minuto. Si sigue "offline", el agente no logró conectar: los logs del
    paso 2 dicen por qué.
+{{- if .Values.cluster.bootstrapToken }}
+
+Bootstrap del token:
+
+   Instalaste con cluster.bootstrapToken, un token de un solo uso que vence en
+   2 horas. Al arrancar, el agente lo canjea contra
+   {{ .Values.api.url }}/v1/agent/bootstrap por el token real del cluster y lo
+   guarda en el Secret {{ .Release.Namespace }}/{{ include "rampa-agent.agentTokenSecretName" . }}
+   (por eso el chart crea un Role acotado a ese Secret). Si la API todavía no
+   responde, reintenta hasta 10 minutos. En los arranques siguientes lee ese
+   Secret y no vuelve a canjear.
+
+   - Si el log dice que el bootstrap token "ya se usó o venció", pedí uno nuevo
+     en la web (Clusters > el cluster > Comando de instalación) y hacé
+     helm upgrade con --set-string cluster.bootstrapToken=<nuevo>. Si además el
+     Secret {{ include "rampa-agent.agentTokenSecretName" . }} existe con un token viejo (por ejemplo después
+     de rotar el token en la web), borralo antes:
+       kubectl -n {{ .Release.Namespace }} delete secret {{ include "rampa-agent.agentTokenSecretName" . }}
+   - Cuando el cluster esté online podés borrar el Secret de bootstrap, ya no
+     sirve para nada:
+       kubectl -n {{ .Release.Namespace }} delete secret {{ include "rampa-agent.bootstrapSecretName" . }}
+   - Estado estable recomendado para los próximos upgrades:
+       --set cluster.existingSecret={{ include "rampa-agent.agentTokenSecretName" . }} (sin bootstrapToken)
+     El agente pasa a recibir el token por variable de entorno y el chart deja
+     de necesitar el Role.
+{{- end }}
 {{- if not .Values.serviceAccount.annotations }}
 
 Aviso: el ServiceAccount no tiene anotaciones de identidad de nube. Sin IRSA,

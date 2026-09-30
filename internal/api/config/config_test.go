@@ -167,3 +167,26 @@ func TestInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustedProxies(t *testing.T) {
+	base := map[string]string{
+		"RAMPA_DATABASE_URL":   "postgres://u:p@localhost/db",
+		"RAMPA_SESSION_SECRET": strings.Repeat("s", 32),
+	}
+	c, err := Load(env(base))
+	if err != nil || len(c.TrustedProxies) != 0 {
+		t.Fatalf("por defecto no hay proxies de confianza: %v %v", err, c.TrustedProxies)
+	}
+	base["RAMPA_TRUSTED_PROXIES"] = "10.0.0.0/8, 192.168.1.7 ,,fd00::/8"
+	c, err = Load(env(base))
+	if err != nil || len(c.TrustedProxies) != 3 {
+		t.Fatalf("proxies: %v %v", err, c.TrustedProxies)
+	}
+	if c.TrustedProxies[1].String() != "192.168.1.7/32" {
+		t.Errorf("una IP suelta vale como /32: %v", c.TrustedProxies[1])
+	}
+	base["RAMPA_TRUSTED_PROXIES"] = "10.0.0.0/8,nada"
+	if _, err := Load(env(base)); err == nil || !strings.Contains(err.Error(), "RAMPA_TRUSTED_PROXIES") {
+		t.Errorf("una entrada inválida debería fallar: %v", err)
+	}
+}

@@ -25,9 +25,14 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        {{- if not .Values.cluster.existingSecret }}
+        {{- if .Values.cluster.token }}
         # Reinicia el pod cuando cambia el token (rotación con helm upgrade).
         rampa.dev/token-hash: {{ .Values.cluster.token | sha256sum | trunc 16 | quote }}
+        {{- end }}
+        {{- if .Values.cluster.bootstrapToken }}
+        # Reinicia el pod con un bootstrap token nuevo (por ejemplo tras rotar el
+        # token y borrar el Secret rampa-agent-token).
+        rampa.dev/bootstrap-hash: {{ .Values.cluster.bootstrapToken | sha256sum | trunc 16 | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -36,6 +41,11 @@ spec:
       serviceAccountName: {{ include "rampa-agent.serviceAccountName" . }}
       # El agente usa la identidad del SA para hablar con la API de Kubernetes.
       automountServiceAccountToken: true
+      {{- if .Values.hostNetwork }}
+      # Red del host para llegar al metadata del proveedor (ver values.yaml).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -67,11 +77,29 @@ spec:
           env:
             - name: RAMPA_API_URL
               value: {{ .Values.api.url | quote }}
+            {{- if .Values.cluster.bootstrapToken }}
+            # Bootstrap: el agente canjea este token una sola vez y guarda el token
+            # real en el Secret rampa-agent-token de RAMPA_NAMESPACE. En los
+            # arranques siguientes lee ese Secret; el bootstrap se ignora. optional
+            # permite borrar el Secret de bootstrap después del primer arranque.
+            - name: RAMPA_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rampa-agent.bootstrapSecretName" . }}
+                  key: bootstrap_token
+                  optional: true
+            {{- else }}
             - name: RAMPA_CLUSTER_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "rampa-agent.tokenSecretName" . }}
                   key: {{ .Values.cluster.secretKey | default "token" }}
+            {{- end }}
+            # Namespace del agente: donde lee y guarda el Secret rampa-agent-token.
+            - name: RAMPA_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: RAMPA_LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
             - name: RAMPA_HEALTH_ADDR

@@ -1,0 +1,28 @@
+{{- if and .Values.rbac.create .Values.cluster.bootstrapToken }}
+# Permisos del agente sobre su propio namespace, solo con bootstrap: al canjear
+# el bootstrap token guarda el token real en el Secret rampa-agent-token y en
+# cada arranque lo vuelve a leer. Es un Role (no ClusterRole) y está acotado
+# por resourceNames a ese único Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rampa-agent.fullname" . }}-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rampa-agent.labels" . | nindent 4 }}
+rules:
+  # Leer y actualizar el Secret rampa-agent-token y ningún otro. list queda
+  # acotado igual: el API server solo lo autoriza con fieldSelector
+  # metadata.name=rampa-agent-token (el agente usa get, no list).
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ include "rampa-agent.agentTokenSecretName" . }}]
+    verbs: [get, list, update, patch]
+  # create no admite resourceNames: RBAC evalúa la petición antes de conocer el
+  # nombre del objeto, así que una regla de create con resourceNames nunca
+  # autoriza nada. Queda sin acotar, pero solo dentro de este namespace y solo
+  # para crear (no para leer lo que ya existe).
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+{{- end }}

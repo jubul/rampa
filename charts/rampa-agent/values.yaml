@@ -11,16 +11,31 @@ api:
   url: ""
 
 cluster:
+  # Hace falta exactamente uno de token, existingSecret o bootstrapToken.
+  # El schema y los templates lo exigen.
+  #
   # Token del cluster, tal como lo entrega la web al crear el cluster
-  # (empieza con rampa_cluster_). Se guarda en un Secret que crea este chart.
-  # Requerido salvo que se use existingSecret.
+  # (empieza con rampa_cluster_). Se guarda en el Secret <release>-token que
+  # crea este chart.
   token: ""
   # Nombre de un Secret ya existente en el namespace de instalación con la
-  # clave "token". Si se setea, el chart no crea ningún Secret y cluster.token
-  # se ignora. Útil si el token lo administra ESO, Vault, Sealed Secrets, etc.
+  # clave "token". El chart no crea ningún Secret. Útil si el token lo
+  # administra ESO, Vault, Sealed Secrets, etc. También es el estado estable
+  # después de un bootstrap: existingSecret: rampa-agent-token.
   existingSecret: ""
   # Clave dentro del Secret (propio o existente) que contiene el token.
   secretKey: token
+  # Token de bootstrap de un solo uso (empieza con rampa_bootstrap_, vence en
+  # 2 horas). Lo genera la web (Clusters > el cluster > Comando de instalación)
+  # o POST /v1/orgs/{org}/clusters/{id}/bootstrap-token. El chart lo guarda en
+  # el Secret <release>-bootstrap y lo inyecta como RAMPA_BOOTSTRAP_TOKEN; el
+  # agente lo canjea al arrancar contra POST <api.url>/v1/agent/bootstrap por
+  # el token real y lo guarda en el Secret rampa-agent-token de este namespace
+  # (por eso el chart crea un Role acotado a ese Secret). Es lo que usan los
+  # cloud-init de las VMs y los módulos de OpenTofu: el token real nunca queda
+  # escrito en un lugar legible. Pasalo con --set-string para que Helm no lo
+  # interprete como número.
+  bootstrapToken: ""
 
 image:
   repository: ghcr.io/CHANGEME/rampa-agent
@@ -55,9 +70,30 @@ serviceAccount:
   labels: {}
 
 rbac:
-  # Crear el ClusterRole y el ClusterRoleBinding. Si es false, el cliente los
-  # provee por su cuenta con los mismos permisos (ver templates/clusterrole.yaml).
+  # Crear el ClusterRole y el ClusterRoleBinding (y, con bootstrapToken, el Role
+  # y RoleBinding del namespace para el Secret rampa-agent-token). Si es false,
+  # el cliente los provee por su cuenta con los mismos permisos (ver
+  # templates/clusterrole.yaml y templates/role.yaml).
   create: true
+  # Permitir al agente leer, crear y actualizar el Secret <app>-params en los
+  # namespaces de las apps (comando write_secret con target kubernetes). Lo usa
+  # un cluster con secret_store: kubernetes (VMs con k3s, nubes sin gestor de
+  # secretos).
+  # Alcance real: es un ClusterRole con get, create y update sobre secrets, o
+  # sea que RBAC permite leer cualquier Secret por nombre en cualquier
+  # namespace. Lo acotan el código del agente (solo <app>-<scope> con la label
+  # de la app) y que no hay list ni watch. Si tu cluster usa un gestor de
+  # secretos de nube vía External Secrets, ponelo en false: el agente no tendrá
+  # ningún permiso sobre secrets fuera de su namespace.
+  appSecrets: true
+
+# Usar la red del host (hostNetwork: true, con dnsPolicy ClusterFirstWithHostNet).
+# Motivo: en máquinas de un nodo con k3s el metadata del proveedor
+# (169.254.169.254) se bloquea desde la red de pods con iptables, y el agente
+# necesita llegar a él para obtener credenciales por instance profile. Con la
+# red del host el pod queda fuera de esa regla. Déjalo en false salvo ese caso:
+# el pod comparte la red del nodo, y healthPort se abre en la IP del nodo.
+hostNetwork: false
 
 # El agente es liviano: mantiene un WebSocket, aplica objetos y observa rollouts.
 resources:

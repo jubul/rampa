@@ -63,7 +63,7 @@ type Hello struct {
 	Protocol          int      `json:"protocol"`
 	AgentVersion      string   `json:"agent_version"`
 	KubernetesVersion string   `json:"kubernetes_version"`
-	Capabilities      []string `json:"capabilities"` // "deploy", "undeploy", "status", "logs"
+	Capabilities      []string `json:"capabilities"` // "deploy", "undeploy", "status", "logs", "write_secret"
 	// InFlight son los ids de comandos que el agente todavía está ejecutando al
 	// reconectar. La API marca como failed cualquier comando acked de este cluster
 	// que no esté en la lista: su result se perdió (el agente se reinició).
@@ -95,16 +95,19 @@ const (
 	CommandUndeploy CommandKind = "undeploy"
 	CommandStatus   CommandKind = "status"
 	CommandLogs     CommandKind = "logs"
+	// CommandWriteSecret escribe secretos de aplicación donde el cluster los guarda.
+	CommandWriteSecret CommandKind = "write_secret"
 )
 
 // Command es una orden de la API. Exactamente uno de los punteros está seteado según Kind.
 type Command struct {
-	ID       string           `json:"id"`
-	Kind     CommandKind      `json:"kind"`
-	Deploy   *DeployCommand   `json:"deploy,omitempty"`
-	Undeploy *UndeployCommand `json:"undeploy,omitempty"`
-	Status   *StatusCommand   `json:"status,omitempty"`
-	Logs     *LogsCommand     `json:"logs,omitempty"`
+	ID          string              `json:"id"`
+	Kind        CommandKind         `json:"kind"`
+	Deploy      *DeployCommand      `json:"deploy,omitempty"`
+	Undeploy    *UndeployCommand    `json:"undeploy,omitempty"`
+	Status      *StatusCommand      `json:"status,omitempty"`
+	Logs        *LogsCommand        `json:"logs,omitempty"`
+	WriteSecret *WriteSecretCommand `json:"write_secret,omitempty"`
 }
 
 // DeployCommand: aplicar objetos en un namespace y esperar a que el workload esté sano.
@@ -148,6 +151,21 @@ type LogsCommand struct {
 	TailLines       int    `json:"tail_lines"`
 	Follow          bool   `json:"follow"`
 	DurationSeconds int    `json:"duration_seconds"` // cuánto seguir como máximo
+}
+
+// WriteSecretCommand: guardar secretos de una app para un scope. Los valores
+// viajan solo en este mensaje (TLS) y no se persisten en el plano de control.
+//
+//	target "kubernetes": el agente crea o actualiza el Secret <App>-params en
+//	  Namespace con las claves de Values (merge: no borra claves que no vengan).
+//	target "cloud": el agente escribe cada clave en el gestor de secretos de la
+//	  nube en la ruta rampa/<App>/<Scope>/<CLAVE> con su identidad de workload.
+type WriteSecretCommand struct {
+	App       string            `json:"app"`
+	Scope     string            `json:"scope"`
+	Namespace string            `json:"namespace"`
+	Target    string            `json:"target"` // kubernetes | cloud
+	Values    map[string]string `json:"values"`
 }
 
 // Ack confirma que el agente recibió el comando y empezó a trabajar.

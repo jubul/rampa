@@ -1,0 +1,7 @@
+# VM de un nodo con k3s: el agente usa la red del host para llegar al metadata
+# del proveedor (169.254.169.254).
+api:
+  url: https://api.rampa.dev
+cluster:
+  token: rampa_cluster_ci_0000000000000000000000000000
+hostNetwork: true

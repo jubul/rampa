@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { formatRelative, parseDate, pluralize, shortId, shortImage } from "./format";
+import { afterEach, describe, expect, it } from "vitest";
+import i18n from "../i18n";
+import { formatDateTime, formatRelative, parseDate, shortId, shortImage } from "./format";
 
 describe("shortImage", () => {
   it("deja solo repo:tag de una referencia completa", () => {
@@ -40,8 +41,19 @@ describe("parseDate y otros", () => {
     expect(shortId("0f4a1e2b-1234-5678-9abc-def012345678")).toBe("0f4a1e2b");
     expect(shortId(null)).toBe("-");
   });
-  it("pluralize", () => {
-    expect(pluralize(1, "réplica", "réplicas")).toBe("1 réplica");
-    expect(pluralize(3, "réplica", "réplicas")).toBe("3 réplicas");
+});
+
+describe("idioma", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("es");
+  });
+  it("formatea fechas y tiempos relativos según el idioma activo", async () => {
+    const now = Date.parse("2026-09-29T12:00:00Z");
+    await i18n.changeLanguage("en");
+    expect(formatRelative("2026-09-29T11:55:00Z", now)).toBe("5 minutes ago");
+    expect(formatDateTime("2026-09-29T15:30:00Z")).toMatch(/09\/29\/2026/);
+    await i18n.changeLanguage("es");
+    expect(formatRelative("2026-09-29T11:55:00Z", now)).toContain("hace 5 minutos");
+    expect(formatDateTime("2026-09-29T15:30:00Z")).toMatch(/29\/9\/2026|29\/09\/2026/);
   });
 });

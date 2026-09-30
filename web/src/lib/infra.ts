@@ -9,6 +9,7 @@ import type {
   InfraRun,
 } from "../api/types";
 import type { Tone } from "./status";
+import i18n from "../i18n";
 
 const runTone: Record<string, Tone> = {
   queued: "amber",
@@ -21,23 +22,12 @@ const runTone: Record<string, Tone> = {
   destroyed: "gray",
 };
 
-const runLabel: Record<string, string> = {
-  queued: "En cola",
-  initializing: "Inicializando",
-  planning: "Planificando",
-  applying: "Aplicando",
-  succeeded: "Listo",
-  failed: "Falló",
-  destroying: "Destruyendo",
-  destroyed: "Destruido",
-};
-
 export function toneForRun(status: string): Tone {
   return runTone[status] ?? "gray";
 }
 
 export function labelForRun(status: string): string {
-  return runLabel[status] ?? status;
+  return i18n.t(`runStatus.${status}`, { defaultValue: status });
 }
 
 /** Estados en los que el run todavía avanza y conviene refrescar. */
@@ -107,46 +97,60 @@ export function logReducer(state: LogState, action: LogAction): LogState {
   }
 }
 
-// Formulario de cluster
+// Formulario de cluster o máquina, armado desde los inputs del módulo
 
-export interface ClusterFormValues {
-  cloud_account_id: string;
-  name: string;
-  env: ClusterEnv;
-  kubernetes_version: string;
-  domain: string;
-  ingress_class: string;
-  admin_arns: string;
+/** Inputs que el formulario ya pide con campos fijos (cuenta, nombre, entorno). */
+const FIXED_INPUTS = new Set(["name", "env", "cloud_account_id"]);
+/** Inputs que arma la API o son secretos: nunca se piden acá. */
+const HIDDEN_INPUTS = /^(api_url|agent_chart_url|bootstrap_token|agent_token|cluster_token)$|token|secret|password/i;
+
+export type InputKind = "select" | "text" | "number" | "bool" | "list";
+
+export function inputKind(input: InfraModuleInput): InputKind {
+  const type = (input.type ?? "").toLowerCase();
+  if (input.options && input.options.length > 0) return "select";
+  if (type === "bool" || type === "boolean") return "bool";
+  if (type === "number" || type === "int" || type === "integer") return "number";
+  if (type === "list" || type === "array" || Array.isArray(input.default)) return "list";
+  if (type === "" && /(_arns|_cidrs|_ids|_keys|_list)$/.test(input.name)) return "list";
+  return "text";
 }
 
-export const FALLBACK_K8S_VERSION = "1.33";
+/** Inputs que se renderizan en el formulario (sin los fijos ni los secretos). */
+export function visibleInputs(inputs: InfraModuleInput[] | undefined): InfraModuleInput[] {
+  return (inputs ?? []).filter((i) => !FIXED_INPUTS.has(i.name) && !i.secret && !HIDDEN_INPUTS.test(i.name));
+}
 
 export function findInput(inputs: InfraModuleInput[] | undefined, name: string): InfraModuleInput | undefined {
   return inputs?.find((i) => i.name === name);
 }
 
-/** Default de un input: su default, si no la primera opción, si no el fallback. */
-export function inputDefault(input: InfraModuleInput | undefined, fallback = ""): string {
-  if (!input) return fallback;
-  if (input.default !== undefined && input.default !== "") return input.default;
-  return input.options?.[0] ?? fallback;
+function defaultText(input: InfraModuleInput): string {
+  const d = input.default;
+  if (Array.isArray(d)) return d.map(String).join("\n");
+  if (d === undefined || d === null) return "";
+  return String(d);
 }
 
-/** Valores iniciales del formulario a partir de los inputs del módulo. */
-export function inputsToFormValues(inputs: InfraModuleInput[] | undefined): ClusterFormValues {
-  return {
-    cloud_account_id: "",
-    name: "",
-    env: "nonprod",
-    kubernetes_version: inputDefault(findInput(inputs, "kubernetes_version"), FALLBACK_K8S_VERSION),
-    domain: inputDefault(findInput(inputs, "domain")),
-    ingress_class: inputDefault(findInput(inputs, "ingress_class"), "nginx"),
-    admin_arns: "",
-  };
+/** Default de un input: su default, si no la primera opción (en selects), si no vacío. */
+export function inputDefault(input: InfraModuleInput | undefined, fallback = ""): string {
+  if (!input) return fallback;
+  const d = defaultText(input);
+  if (d !== "") return d;
+  if (input.options && input.options.length > 0) return input.options[0] ?? fallback;
+  if (inputKind(input) === "bool") return "false";
+  return fallback;
+}
+
+/** Valores iniciales (todo como texto) a partir de los inputs del módulo. */
+export function initialInputValues(inputs: InfraModuleInput[] | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const i of visibleInputs(inputs)) out[i.name] = inputDefault(i);
+  return out;
 }
 
 /** Separa por líneas o comas, recorta y elimina duplicados y vacíos. */
-export function parseArns(text: string): string[] {
+export function parseList(text: string): string[] {
   const seen = new Set<string>();
   for (const part of text.split(/[\n,]+/)) {
     const v = part.trim();
@@ -155,47 +159,131 @@ export function parseArns(text: string): string[] {
   return Array.from(seen);
 }
 
-export function formValuesToRequest(v: ClusterFormValues): CreateInfraClusterRequest {
-  return {
-    cloud_account_id: v.cloud_account_id,
-    name: v.name.trim(),
-    env: v.env,
-    kubernetes_version: v.kubernetes_version.trim(),
-    domain: v.domain.trim(),
-    ingress_class: v.ingress_class.trim() || "nginx",
-    admin_principal_arns: parseArns(v.admin_arns),
-  };
+/** Valores del formulario a los tipos del input; los opcionales vacíos se omiten. */
+export function inputsToPayload(inputs: InfraModuleInput[] | undefined, values: Record<string, string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const i of visibleInputs(inputs)) {
+    const raw = values[i.name] ?? "";
+    switch (inputKind(i)) {
+      case "list": {
+        const list = parseList(raw);
+        if (list.length > 0) out[i.name] = list;
+        break;
+      }
+      case "bool":
+        out[i.name] = raw === "true";
+        break;
+      case "number":
+        if (raw.trim() !== "" && !Number.isNaN(Number(raw))) out[i.name] = Number(raw);
+        break;
+      default:
+        if (raw.trim() !== "") out[i.name] = raw.trim();
+    }
+  }
+  return out;
 }
 
-export function validateClusterForm(v: ClusterFormValues): Partial<Record<keyof ClusterFormValues, string>> {
-  const errors: Partial<Record<keyof ClusterFormValues, string>> = {};
-  if (!v.cloud_account_id) errors.cloud_account_id = "Elegí una cuenta conectada";
-  if (v.name.trim() === "") errors.name = "El nombre es obligatorio";
-  else if (!/^[a-z][a-z0-9-]{0,38}[a-z0-9]$|^[a-z]$/.test(v.name.trim())) errors.name = "Minúsculas, dígitos y guiones; empieza con letra";
-  if (v.domain.trim() === "") errors.domain = "El dominio es obligatorio";
-  if (v.kubernetes_version.trim() === "") errors.kubernetes_version = "Elegí una versión";
-  for (const arn of parseArns(v.admin_arns)) {
-    if (!arn.startsWith("arn:")) {
-      errors.admin_arns = `"${arn}" no parece un ARN (empieza con arn:)`;
-      break;
+export interface ClusterFormBase {
+  cloud_account_id: string;
+  name: string;
+  env: ClusterEnv;
+}
+
+export type ClusterFormErrors = Record<string, string>;
+
+const NAME_RE = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$|^[a-z]$/;
+
+export function validateClusterForm(
+  base: ClusterFormBase,
+  inputs: InfraModuleInput[] | undefined,
+  values: Record<string, string>,
+): ClusterFormErrors {
+  const errors: ClusterFormErrors = {};
+  if (!base.cloud_account_id) errors.cloud_account_id = i18n.t("validation.pickAccount");
+  if (base.name.trim() === "") errors.name = i18n.t("validation.nameRequired");
+  else if (!NAME_RE.test(base.name.trim())) errors.name = i18n.t("validation.nameFormat");
+  for (const i of visibleInputs(inputs)) {
+    const raw = values[i.name] ?? "";
+    const kind = inputKind(i);
+    if (i.required && (kind === "list" ? parseList(raw).length === 0 : raw.trim() === "")) {
+      errors[i.name] = i18n.t("validation.required");
+      continue;
+    }
+    if (kind === "number" && raw.trim() !== "" && Number.isNaN(Number(raw))) errors[i.name] = i18n.t("validation.number");
+    if (kind === "list" && /arn/i.test(i.name)) {
+      const bad = parseList(raw).find((v) => !v.startsWith("arn:"));
+      if (bad) errors[i.name] = i18n.t("validation.notArn", { value: bad });
     }
   }
   return errors;
 }
 
-/** Módulos de cluster disponibles y los que todavía no. */
-export function splitClusterModules(items: InfraModule[]): { available: InfraModule[]; upcoming: InfraModule[] } {
-  const clusters = items.filter((m) => m.kind === "cluster");
-  return { available: clusters.filter((m) => m.available), upcoming: clusters.filter((m) => !m.available) };
+/**
+ * Arma el body de POST /infra/clusters: cuenta, nombre, entorno, módulo e
+ * inputs. Los campos históricos del contrato (kubernetes_version, domain,
+ * ingress_class, admin_principal_arns) se repiten a nivel raíz si el módulo
+ * los declara, así funciona con un servidor que todavía los lea de ahí.
+ */
+export function buildClusterRequest(
+  base: ClusterFormBase,
+  module: Pick<InfraModule, "module" | "inputs">,
+  values: Record<string, string>,
+): CreateInfraClusterRequest {
+  const inputs = inputsToPayload(module.inputs, values);
+  const req: CreateInfraClusterRequest = {
+    cloud_account_id: base.cloud_account_id,
+    name: base.name.trim(),
+    env: base.env,
+    module: module.module ?? "",
+    inputs,
+  };
+  if (typeof inputs.kubernetes_version === "string") req.kubernetes_version = inputs.kubernetes_version;
+  if (typeof inputs.domain === "string") req.domain = inputs.domain;
+  if (typeof inputs.ingress_class === "string") req.ingress_class = inputs.ingress_class;
+  if (Array.isArray(inputs.admin_principal_arns)) req.admin_principal_arns = inputs.admin_principal_arns as string[];
+  return req;
 }
 
-export const providerNames: Record<string, string> = {
-  aws: "AWS",
-  gcp: "Google Cloud",
-  azure: "Azure",
-  digitalocean: "DigitalOcean",
-  oci: "Oracle Cloud",
-};
+/** Módulos de un kind disponibles y los que todavía no, opcionalmente de un solo provider. */
+export function splitModules(
+  items: InfraModule[],
+  kind: string,
+  provider?: string,
+): { available: InfraModule[]; upcoming: InfraModule[] } {
+  const list = items.filter((m) => m.kind === kind && (provider === undefined || m.provider === provider));
+  return { available: list.filter((m) => m.available), upcoming: list.filter((m) => !m.available) };
+}
+
+const COST_RE = /(US?\$\s?\d|\$\s?\d|\d[\d.,]*\s?(USD|EUR|€)|€\s?\d)/i;
+
+/**
+ * Costo aproximado del tamaño elegido, si el módulo lo trae en la descripción
+ * (del input o del módulo). Busca una línea que mencione el valor elegido y un
+ * importe; si no hay por valor, usa la primera línea con importe de la
+ * descripción del input. Devuelve null si no hay nada.
+ */
+export function costHint(module: Pick<InfraModule, "description" | "inputs">, chosen: { input?: string; value: string }): string | null {
+  const input = chosen.input ? findInput(module.inputs, chosen.input) : undefined;
+  const sources = [input?.description, input?.help, module.description].filter((x): x is string => !!x);
+  const value = chosen.value.trim();
+  for (const src of sources) {
+    const lines = src.split(/\n|;/).map((l) => l.trim()).filter(Boolean);
+    if (value) {
+      const hit = lines.find((l) => l.includes(value) && COST_RE.test(l));
+      if (hit) return hit;
+    }
+  }
+  for (const src of [input?.description, input?.help].filter((x): x is string => !!x)) {
+    const hit = src.split(/\n|;/).map((l) => l.trim()).find((l) => COST_RE.test(l));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Nombre del input que representa el tamaño de la máquina, si existe. */
+export function sizeInputName(inputs: InfraModuleInput[] | undefined): string | undefined {
+  return visibleInputs(inputs).find((i) => /^(size|droplet_size|instance_type|shape|plan|machine_type)$/.test(i.name))?.name;
+}
 
 export function outputEntries(run: Pick<InfraRun, "outputs">): [string, string][] {
   return Object.entries(run.outputs ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]);

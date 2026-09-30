@@ -541,3 +541,48 @@ func TestResultRetriesTransientErrors(t *testing.T) {
 		t.Errorf("un ErrNotFound no debe reintentarse: %d llamadas", calls)
 	}
 }
+
+// TestSendLiveOnly: Send entrega un comando por la conexión viva sin pasar por
+// la cola (el backend solo lo ve como sent), y falla con ErrOffline sin conexión.
+func TestSendLiveOnly(t *testing.T) {
+	f := newFake()
+	h, srv := newServer(t, f, Options{})
+	cmd := protocol.Command{
+		ID: "ws-1", Kind: protocol.CommandWriteSecret,
+		WriteSecret: &protocol.WriteSecretCommand{App: "checkout-api", Scope: "dev", Namespace: "checkout-api-dev", Target: "kubernetes", Values: map[string]string{"API_KEY": "s3cr3t"}},
+	}
+	if err := h.Send("cl-1", cmd); !errors.Is(err, ErrOffline) {
+		t.Fatalf("sin conexión esperaba ErrOffline, tengo %v", err)
+	}
+
+	agent, _, err := dialAgent(t, srv, f.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.conn.Close(websocket.StatusNormalClosure, "")
+	agent.hello()
+	waitFor(t, "online", func() bool { return h.Online("cl-1") })
+
+	// El comando no está en la cola del fake: llega igual, con los valores.
+	if err := h.Send("cl-1", cmd); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	env := agent.read()
+	if env.Kind != protocol.KindCommand || env.CommandID != "ws-1" {
+		t.Fatalf("esperaba el comando ws-1, tengo %+v", env)
+	}
+	var got protocol.Command
+	if err := json.Unmarshal(env.Payload, &got); err != nil || got.WriteSecret == nil || got.WriteSecret.Values["API_KEY"] != "s3cr3t" || got.WriteSecret.Target != "kubernetes" {
+		t.Fatalf("payload: %v %+v", err, got)
+	}
+	waitFor(t, "marcado sent", func() bool {
+		st, _, _ := f.snapshot()
+		return st["ws-1"] == store.CommandSent
+	})
+	// Cortada la conexión, Send vuelve a fallar.
+	h.Disconnect("cl-1", "fin del test")
+	waitFor(t, "offline", func() bool { return !h.Online("cl-1") })
+	if err := h.Send("cl-1", cmd); !errors.Is(err, ErrOffline) {
+		t.Errorf("tras desconectar esperaba ErrOffline, tengo %v", err)
+	}
+}

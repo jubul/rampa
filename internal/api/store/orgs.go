@@ -104,11 +104,11 @@ func (s *Store) ListOrgsForUser(ctx context.Context, userID string) ([]Membershi
 
 // ---- users ----
 
-const userColumns = "id, email, name, created_at, updated_at"
+const userColumns = "id, email, name, locale, created_at, updated_at"
 
 func scanUser(row interface{ Scan(dest ...any) error }) (*User, error) {
 	var u User
-	if err := row.Scan(&u.ID, &u.Email, &u.Name, &u.CreatedAt, &u.UpdatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Locale, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil, translate(err)
 	}
 	return &u, nil
@@ -138,6 +138,11 @@ func (s *Store) UpsertUser(ctx context.Context, email, name string) (*User, erro
 // GetUser busca un usuario por id.
 func (s *Store) GetUser(ctx context.Context, userID string) (*User, error) {
 	return scanUser(s.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, userID))
+}
+
+// SetUserLocale guarda el idioma preferido ("es", "en" o "" para ninguno).
+func (s *Store) SetUserLocale(ctx context.Context, userID, locale string) (*User, error) {
+	return scanUser(s.db.QueryRow(ctx, `UPDATE users SET locale = $2, updated_at = now() WHERE id = $1 RETURNING `+userColumns, userID, locale))
 }
 
 // GetUsersByID devuelve un mapa id -> usuario. Los ids que no existen se omiten.
@@ -206,7 +211,7 @@ func (s *Store) CountOwners(ctx context.Context, orgID string) (int, error) {
 
 // ListMembers devuelve los miembros con su usuario.
 func (s *Store) ListMembers(ctx context.Context, orgID string) ([]MemberWithUser, error) {
-	rows, err := s.db.Query(ctx, `SELECT u.id, u.email, u.name, u.created_at, u.updated_at, m.role
+	rows, err := s.db.Query(ctx, `SELECT u.id, u.email, u.name, u.locale, u.created_at, u.updated_at, m.role
 		FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = $1 ORDER BY u.email`, orgID)
 	if err != nil {
 		return nil, translate(err)
@@ -216,7 +221,7 @@ func (s *Store) ListMembers(ctx context.Context, orgID string) ([]MemberWithUser
 	for rows.Next() {
 		var u User
 		var role string
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.CreatedAt, &u.UpdatedAt, &role); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Locale, &u.CreatedAt, &u.UpdatedAt, &role); err != nil {
 			return nil, err
 		}
 		out = append(out, MemberWithUser{User: u, Role: role})

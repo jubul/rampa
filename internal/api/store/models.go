@@ -63,6 +63,17 @@ const (
 	EnvNonprod = "nonprod"
 )
 
+// Kinds de cluster (ADR 0004): un Kubernetes administrado o registrado, o una
+// máquina de un solo nodo con k3s creada por Rampa.
+const (
+	ClusterKindKubernetes = "kubernetes"
+	ClusterKindVM         = "vm"
+)
+
+// SecretStoreKubernetes es el valor especial de clusters.secret_store para
+// nubes sin gestor de secretos: el agente mantiene el Secret <app>-params.
+const SecretStoreKubernetes = "kubernetes"
+
 // Estados de un run de infraestructura (docs/api.md): apply pasa por
 // queued, initializing, planning y applying hasta succeeded o failed; destroy
 // pasa por destroying hasta destroyed o failed.
@@ -83,9 +94,11 @@ const (
 	InfraOpDestroy = "destroy"
 )
 
-// Kinds de run de infraestructura.
+// Kinds de run de infraestructura: un Kubernetes administrado o una máquina
+// con k3s. Los dos crean un Cluster en Rampa.
 const (
 	InfraKindCluster = "cluster"
+	InfraKindVM      = "vm"
 )
 
 // OrgSettings son las políticas de una organización.
@@ -109,9 +122,11 @@ type Organization struct {
 
 // User es una identidad global.
 type User struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	// Locale es el idioma preferido ("es", "en") o "" para usar Accept-Language.
+	Locale    string    `json:"locale"`
 	CreatedAt time.Time `json:"-"`
 	UpdatedAt time.Time `json:"-"`
 }
@@ -155,7 +170,9 @@ func (t *APIToken) Expired(now time.Time) bool {
 	return t.ExpiresAt != nil && !now.Before(*t.ExpiresAt)
 }
 
-// CloudAccount es una cuenta de nube conectada. Nunca contiene credenciales.
+// CloudAccount es una cuenta de nube conectada. Nunca contiene credenciales en
+// claro: las de los providers con auth token viven cifradas en
+// credentials_ciphertext y solo se descifran en memoria para llamar a la nube.
 type CloudAccount struct {
 	ID           string            `json:"id"`
 	OrgID        string            `json:"-"`
@@ -166,8 +183,10 @@ type CloudAccount struct {
 	Settings     map[string]string `json:"settings"`
 	Status       string            `json:"status"`
 	Verification *Verification     `json:"verification"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"-"`
+	// HasCredentials dice si hay credenciales cifradas guardadas.
+	HasCredentials bool      `json:"has_credentials"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"-"`
 }
 
 // Verification es el resultado de la última verificación de una cuenta.
@@ -177,12 +196,14 @@ type Verification struct {
 	Message  string `json:"message"`
 }
 
-// Cluster es un cluster de Kubernetes con un agente.
+// Cluster es un cluster de Kubernetes con un agente: administrado, registrado
+// a mano o una máquina de un nodo con k3s (Kind vm).
 type Cluster struct {
 	ID                string     `json:"id"`
 	OrgID             string     `json:"-"`
 	CloudAccountID    string     `json:"cloud_account_id"`
 	Name              string     `json:"name"`
+	Kind              string     `json:"kind"`
 	Env               string     `json:"env"`
 	TokenHash         string     `json:"-"`
 	AgentVersion      string     `json:"agent_version"`
@@ -199,6 +220,19 @@ type Cluster struct {
 	InfraRunID string    `json:"infra_run_id"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"-"`
+}
+
+// BootstrapToken es un token de un solo uso para instalar el agente donde el
+// token real no debe quedar escrito (cloud-init). Solo se guarda su hash.
+type BootstrapToken struct {
+	ID        string     `json:"id"`
+	OrgID     string     `json:"-"`
+	ClusterID string     `json:"cluster_id"`
+	TokenHash string     `json:"-"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at"`
+	CreatedBy string     `json:"-"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // InfraRun es una ejecución de OpenTofu contra la cuenta de un cliente.
@@ -224,6 +258,11 @@ type InfraRun struct {
 	FinishedAt     *time.Time      `json:"finished_at"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"-"`
+}
+
+// CreatesCluster dice si el run crea un Cluster en Rampa (cluster o vm).
+func (r *InfraRun) CreatesCluster() bool {
+	return (r.Kind == InfraKindCluster || r.Kind == InfraKindVM) && r.ClusterID != ""
 }
 
 // Terminal dice si el run ya no cambia.

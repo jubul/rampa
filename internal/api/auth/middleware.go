@@ -172,7 +172,12 @@ func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 			a.WriteErr(w, http.StatusUnauthorized, "unauthorized", "hace falta iniciar sesión o mandar un token de API")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+		ctx := WithPrincipal(r.Context(), p)
+		// El idioma guardado del usuario gana sobre Accept-Language.
+		if p.User != nil {
+			ctx = WithLocale(ctx, ResolveLocale(p.User.Locale, r.Header.Get("Accept-Language")))
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

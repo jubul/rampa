@@ -20,11 +20,20 @@ const (
 	PRScopeKey = "pr"
 )
 
+// Computes son los motores donde corre un scope (ADR 0004): kubernetes es un
+// cluster (administrado o una máquina de un nodo con k3s); serverless es la
+// misma imagen como función (AWS Lambda, ola dos). Los efímeros heredan el de pr.
+const (
+	ComputeKubernetes = "kubernetes"
+	ComputeServerless = "serverless"
+)
+
 var (
 	Types           = []string{"api", "worker", "cron", "static"}
 	Runtimes        = []string{"go", "node", "python", "static"}
 	Sizes           = []string{"S", "M", "L", "XL"}
 	Strategies      = []string{"rolling", "canary", "bluegreen"}
+	Computes        = []string{ComputeKubernetes, ComputeServerless}
 	ServiceTypes    = []string{"postgres", "redis", "sqs", "s3", "dynamodb"}
 	PermanentScopes = []string{"dev", "staging", "prod"}
 
@@ -60,6 +69,8 @@ type Spec struct {
 }
 
 type Scope struct {
+	// Compute es el motor: kubernetes (default) o serverless.
+	Compute     string       `yaml:"compute,omitempty"`
 	Size        string       `yaml:"size"`
 	Replicas    int          `yaml:"replicas"`
 	Strategy    string       `yaml:"strategy,omitempty"`
@@ -154,6 +165,9 @@ func (a *Application) applyDefaults() {
 		}
 	}
 	for name, s := range a.Spec.Scopes {
+		if s.Compute == "" {
+			s.Compute = ComputeKubernetes
+		}
 		if s.Size == "" {
 			s.Size = "S"
 		}
@@ -232,6 +246,9 @@ func (a *Application) Validate() []error {
 		if contains(PermanentScopes, name) {
 			hasPermanent = true
 		}
+		if !contains(Computes, s.Compute) {
+			add("spec.scopes.%s.compute %q inválido. Opciones: %s", name, s.Compute, strings.Join(Computes, ", "))
+		}
 		if !contains(Sizes, s.Size) {
 			add("spec.scopes.%s.size %q inválido. Opciones: %s", name, s.Size, strings.Join(Sizes, ", "))
 		}
@@ -293,11 +310,8 @@ func (a *Application) Validate() []error {
 
 	for i, prm := range a.Spec.Parameters {
 		p := fmt.Sprintf("spec.parameters[%d]", i)
-		if !envRe.MatchString(prm.Name) {
-			add("%s.name %q inválido: MAYUSCULAS_CON_GUION_BAJO", p, prm.Name)
-		}
-		if strings.HasPrefix(prm.Name, "RAMPA_") || prm.Name == "PORT" {
-			add("%s.name %q está reservado por la plataforma", p, prm.Name)
+		if err := ValidateParameterName(prm.Name); err != nil {
+			add("%s.name %v", p, err)
 		}
 		sources := 0
 		if prm.Value != "" {
@@ -329,6 +343,20 @@ func (a *Application) Validate() []error {
 		}
 	}
 	return errs
+}
+
+// ValidateParameterName aplica la regla de los nombres de parameters (y de los
+// secretos de aplicación, que son la misma cosa): MAYUSCULAS_CON_GUION_BAJO y
+// sin los nombres reservados por la plataforma (RAMPA_* y PORT). Devuelve el
+// error listo para anteponerle el campo: `%q inválido: ...`.
+func ValidateParameterName(name string) error {
+	if !envRe.MatchString(name) {
+		return fmt.Errorf("%q inválido: MAYUSCULAS_CON_GUION_BAJO", name)
+	}
+	if strings.HasPrefix(name, "RAMPA_") || name == "PORT" {
+		return fmt.Errorf("%q está reservado por la plataforma", name)
+	}
+	return nil
 }
 
 // IsEphemeral dice si el nombre corresponde a un scope efímero (pr-<n>).

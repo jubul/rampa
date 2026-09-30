@@ -1,4 +1,6 @@
-// Mapeo de estados de la API a tonos de Badge y etiquetas en español.
+// Mapeo de estados de la API a tonos de Badge y etiquetas (catálogo i18n, claves status.*).
+
+import i18n from "../i18n";
 
 export type Tone = "green" | "red" | "amber" | "violet" | "gray" | "blue";
 
@@ -25,25 +27,6 @@ const toneByStatus: Record<string, Tone> = {
   connected: "green",
 };
 
-const labelByStatus: Record<string, string> = {
-  awaiting_approval: "Espera aprobación",
-  queued: "En cola",
-  applying: "Aplicando",
-  progressing: "Progresando",
-  healthy: "Sano",
-  failed: "Falló",
-  cancelled: "Cancelado",
-  unbound: "Sin cluster",
-  idle: "Sin desplegar",
-  deploying: "Desplegando",
-  degraded: "Degradado",
-  deleting: "Eliminando",
-  online: "En línea",
-  offline: "Desconectado",
-  pending: "Pendiente",
-  connected: "Conectada",
-};
-
 export function toneForStatus(status: string | null | undefined): Tone {
   if (!status) return "gray";
   return toneByStatus[status] ?? "gray";
@@ -51,7 +34,7 @@ export function toneForStatus(status: string | null | undefined): Tone {
 
 export function labelForStatus(status: string | null | undefined): string {
   if (!status) return "-";
-  return labelByStatus[status] ?? status;
+  return i18n.t(`status.${status}`, { defaultValue: status });
 }
 
 /** Estados de deployment que todavía pueden cambiar. */
@@ -59,21 +42,15 @@ export function isDeploymentActive(status: string): boolean {
   return status === "awaiting_approval" || status === "queued" || status === "applying" || status === "progressing";
 }
 
-export const roleLabels: Record<string, string> = {
-  owner: "Owner",
-  admin: "Admin",
-  developer: "Developer",
-  viewer: "Viewer",
-};
+export function roleLabel(role: string): string {
+  return i18n.t(`roles.${role}`, { defaultValue: role });
+}
 
-export const envLabels: Record<string, string> = {
-  nonprod: "No prod",
-  prod: "Prod",
-};
+export function envLabel(env: string): string {
+  return i18n.t(`env.${env}`, { defaultValue: env });
+}
 
-export const actorTypeLabels: Record<string, string> = {
-  user: "usuario",
-  token: "token",
-  agent: "agente",
-  system: "sistema",
-};
+export function actorTypeLabel(type: string | undefined): string {
+  if (!type) return "";
+  return i18n.t(`actorTypes.${type}`, { defaultValue: type });
+}

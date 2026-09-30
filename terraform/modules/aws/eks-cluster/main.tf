@@ -175,6 +175,7 @@ resource "aws_eks_cluster" "this" {
     subnet_ids              = concat(aws_subnet.private[*].id, aws_subnet.public[*].id)
     endpoint_public_access  = true
     endpoint_private_access = true
+    public_access_cidrs     = var.public_access_cidrs
   }
 
   compute_config {
@@ -330,7 +331,7 @@ resource "helm_release" "rampa_agent" {
   name             = "rampa-agent"
   namespace        = "rampa-system"
   create_namespace = true
-  chart            = var.agent_chart_oci != "" ? var.agent_chart_oci : var.agent_chart_path
+  chart            = coalesce(var.agent_chart_oci, var.agent_chart_path, var.agent_chart_url)
   version          = var.agent_chart_oci != "" && var.agent_chart_version != "" ? var.agent_chart_version : null
   wait             = true
   timeout          = 600
@@ -344,8 +345,11 @@ resource "helm_release" "rampa_agent" {
     var.agent_image_tag != "" ? [{ name = "image.tag", value = var.agent_image_tag }] : [],
   )
 
+  # Con bootstrap_token el agente canjea un token de un solo uso; agent_token queda
+  # por compatibilidad. El chart exige exactamente uno no vacío, asi que el otro va vacio.
   set_sensitive = [
-    { name = "cluster.token", value = var.agent_token },
+    { name = "cluster.bootstrapToken", value = var.bootstrap_token },
+    { name = "cluster.token", value = var.bootstrap_token != "" ? "" : var.agent_token },
   ]
 
   depends_on = [

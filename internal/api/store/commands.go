@@ -60,12 +60,20 @@ func (s *Store) ListAgentCommandsForDeployment(ctx context.Context, orgID, deplo
 	return out, rows.Err()
 }
 
+// LiveOnlyKinds son los comandos que se entregan solo por la conexión viva y
+// nunca se reenvían desde la cola: su payload persistido no está completo
+// (write_secret se guarda sin los valores). Si el agente no hace ack, el
+// reaper los cierra como failed.
+var LiveOnlyKinds = []string{"write_secret"}
+
 // PendingAgentCommands devuelve los comandos que hay que (re)enviar a un
 // cluster: los queued y, si includeSent, los sent que nunca recibieron ack.
+// Excluye LiveOnlyKinds.
 func (s *Store) PendingAgentCommands(ctx context.Context, orgID, clusterID string, includeSent bool) ([]AgentCommand, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+commandColumns+` FROM agent_commands
 		WHERE org_id = $1 AND cluster_id = $2 AND (status = $3 OR ($4 AND status = $5 AND acked_at IS NULL))
-		ORDER BY created_at`, orgID, clusterID, CommandQueued, includeSent, CommandSent)
+		  AND kind <> ALL($6::text[])
+		ORDER BY created_at`, orgID, clusterID, CommandQueued, includeSent, CommandSent, LiveOnlyKinds)
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -81,11 +89,11 @@ func (s *Store) PendingAgentCommands(ctx context.Context, orgID, clusterID strin
 	return out, rows.Err()
 }
 
-// CountPendingAgentCommands cuenta queued más sent sin ack.
+// CountPendingAgentCommands cuenta queued más sent sin ack, sin LiveOnlyKinds.
 func (s *Store) CountPendingAgentCommands(ctx context.Context, orgID, clusterID string) (int, error) {
 	var n int
-	err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_commands WHERE org_id = $1 AND cluster_id = $2 AND (status = $3 OR (status = $4 AND acked_at IS NULL))`,
-		orgID, clusterID, CommandQueued, CommandSent).Scan(&n)
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_commands WHERE org_id = $1 AND cluster_id = $2 AND (status = $3 OR (status = $4 AND acked_at IS NULL)) AND kind <> ALL($5::text[])`,
+		orgID, clusterID, CommandQueued, CommandSent, LiveOnlyKinds).Scan(&n)
 	return n, translate(err)
 }
 

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 import { Layers, Plus } from "lucide-react";
 import { useCloudAccounts, useInfraRuns } from "../api/hooks";
@@ -10,6 +11,7 @@ import { RunStatusBadge } from "../components/RunStatusBadge";
 import { formatDateTime, formatRelative } from "../lib/format";
 
 export function InfraPage() {
+  const { t } = useTranslation();
   const { org = "" } = useParams();
   const runsQ = useInfraRuns(org);
   const accountsQ = useCloudAccounts(org);
@@ -17,15 +19,15 @@ export function InfraPage() {
 
   const newButton = (
     <LinkButton to={`/o/${org}/infra/new-cluster`} icon={<Plus className="size-4" />}>
-      Crear cluster
+      {t("infra.create")}
     </LinkButton>
   );
 
   return (
     <>
       <PageHeader
-        title="Infraestructura"
-        description="Rampa crea la infraestructura en tu nube con OpenTofu y guarda el registro de cada ejecución."
+        title={t("nav.infra")}
+        description={t("infra.description")}
         actions={newButton}
       />
       <Card>
@@ -36,20 +38,20 @@ export function InfraPage() {
         ) : runsQ.data.length === 0 ? (
           <EmptyState
             icon={<Layers className="size-8" />}
-            title="Todavía no hay ejecuciones"
-            description="Creá un cluster con un click: Rampa levanta la red, el cluster y el agente en tu cuenta de nube."
+            title={t("infra.emptyTitle")}
+            description={t("infra.emptyDescription")}
             action={newButton}
           />
         ) : (
           <Table>
             <THead>
               <tr>
-                <TH>Estado</TH>
-                <TH>Nombre</TH>
-                <TH>Módulo</TH>
-                <TH>Cuenta</TH>
-                <TH>Quién</TH>
-                <TH>Cuándo</TH>
+                <TH>{t("infra.colStatus")}</TH>
+                <TH>{t("infra.colName")}</TH>
+                <TH>{t("infra.colModule")}</TH>
+                <TH>{t("infra.colAccount")}</TH>
+                <TH>{t("infra.colWho")}</TH>
+                <TH>{t("infra.colWhen")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -59,14 +61,14 @@ export function InfraPage() {
                     <RunStatusBadge status={r.status} />
                   </TD>
                   <TD>
-                    <Link to={`/o/${org}/infra/runs/${r.id}`} className="font-medium text-slate-900 hover:underline">
+                    <Link to={`/o/${org}/infra/runs/${r.id}`} className="font-medium text-slate-900 dark:text-slate-100 hover:underline">
                       {r.name}
                     </Link>
                   </TD>
                   <TD className="font-mono text-xs">{r.module}</TD>
                   <TD>{accountName(r.cloud_account_id)}</TD>
                   <TD className="text-xs">{r.requested_by?.name || r.requested_by?.email || "-"}</TD>
-                  <TD className="text-xs text-slate-500" title={formatDateTime(r.created_at)}>
+                  <TD className="text-xs text-slate-500 dark:text-slate-400" title={formatDateTime(r.created_at)}>
                     {formatRelative(r.created_at)}
                   </TD>
                 </TR>

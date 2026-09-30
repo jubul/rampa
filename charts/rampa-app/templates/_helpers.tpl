@@ -122,6 +122,10 @@ spec:
       envFrom:
         - secretRef:
             name: {{ include "rampa.name" . }}-params
+            {{- if eq .Values.cluster.secretStore "kubernetes" }}
+            {{- /* El Secret lo crea el agente cuando llegan los secretos (write_secret); el pod arranca aunque todavía no exista. */}}
+            optional: true
+            {{- end }}
       {{- end }}
       resources:
         {{- include "rampa.resources" . | nindent 8 }}

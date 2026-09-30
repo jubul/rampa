@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"rampa.dev/internal/api/auth"
+	"rampa.dev/internal/api/crypto"
 	"rampa.dev/internal/api/events"
 	"rampa.dev/internal/api/store"
 	"rampa.dev/pkg/provider"
@@ -54,6 +55,10 @@ const (
 	StoppedMessage = "la API se detuvo durante el run"
 	// SubjectType es el subject_type de los eventos de un run.
 	SubjectType = "infra_run"
+	// BootstrapTokenTTL es cuánto vale el bootstrap token que el runner le pasa
+	// al módulo: alcanza para un apply largo y no queda vigente para siempre en
+	// el cloud-init de la máquina.
+	BootstrapTokenTTL = 2 * time.Hour
 )
 
 // CredentialsFunc obtiene credenciales temporales para una cuenta. La
@@ -67,7 +72,7 @@ type Service struct {
 	st     *store.Store
 	bus    *events.Bus
 	log    *slog.Logger
-	cipher *Cipher
+	cipher *crypto.Cipher
 
 	tofuPath string
 	readyErr error
@@ -113,7 +118,7 @@ func New(cfg Config, st *store.Store, bus *events.Bus, log *slog.Logger) *Servic
 	}
 	if len(cfg.StateKey) == 0 {
 		problems = append(problems, "falta RAMPA_STATE_KEY (32 bytes en base64 o hex) para cifrar el estado de OpenTofu; generala con: openssl rand -base64 32")
-	} else if c, err := NewCipher(cfg.StateKey); err != nil {
+	} else if c, err := crypto.NewCipher(cfg.StateKey); err != nil {
 		problems = append(problems, "RAMPA_STATE_KEY inválida: "+err.Error())
 	} else {
 		s.cipher = c
@@ -134,6 +139,15 @@ func hostnamePid() string {
 
 // Ready devuelve nil si el runner puede ejecutar runs, o el motivo si no.
 func (s *Service) Ready() error { return s.readyErr }
+
+// Cipher devuelve el cifrado del servidor (RAMPA_STATE_KEY), o nil si no hay clave.
+func (s *Service) Cipher() *crypto.Cipher { return s.cipher }
+
+// AgentChartURL es la URL pública del chart rampa-agent empaquetado que
+// reciben los módulos en agent_chart_url.
+func (s *Service) AgentChartURL() string {
+	return strings.TrimRight(s.cfg.PublicURL, "/") + AgentChartPath
+}
 
 // SetStateBaseURL cambia la base del backend http de estado (por defecto la
 // URL pública). Los tests la apuntan al servidor de prueba.
@@ -179,57 +193,91 @@ func (s *Service) providerCredentials(ctx context.Context, acc provider.CloudAcc
 
 // ---- alta de runs ----
 
-// ClusterRequest es lo que hace falta para crear un cluster con OpenTofu.
+// ClusterRequest es lo que hace falta para crear un cluster (Kubernetes
+// administrado o máquina con k3s) con OpenTofu.
 type ClusterRequest struct {
-	OrgID              string
-	RequestedBy        string
-	Account            *store.CloudAccount
-	Name               string
-	Env                string
-	Domain             string
-	IngressClass       string
-	SecretStore        string
-	KubernetesVersion  string
-	VPCCIDR            string
-	AdminPrincipalARNs []string
-	Actor              store.Actor
+	OrgID       string
+	RequestedBy string
+	Account     *store.CloudAccount
+	// Module es la ruta del módulo ("digitalocean/droplet-k3s"). Vacío: el
+	// módulo kind cluster del provider de la cuenta.
+	Module       string
+	Name         string
+	Env          string
+	Domain       string
+	IngressClass string
+	// SecretStore vacío toma el default del módulo (docs/api.md, tabla de módulos).
+	SecretStore string
+	// Inputs son los inputs propios del módulo, tal como llegan del formulario.
+	// Se validan con ValidateInputs.
+	Inputs map[string]any
+	Actor  store.Actor
 }
 
-// CreateClusterRun crea el Cluster en Rampa (offline, con token) y encola el
-// run que lo va a levantar, en una sola transacción. Los inputs guardados no
-// llevan nada sensible: el token del agente se genera y se inyecta al correr.
+// ResolveModule devuelve el módulo de la request: el explícito, validado
+// contra el provider de la cuenta, o el módulo cluster del provider.
+func ResolveModule(providerKind, modulePath string) (Module, error) {
+	if modulePath == "" {
+		m, ok := FindModule(providerKind, KindCluster)
+		if !ok || !m.Available {
+			return Module{}, &InputError{Name: "module", Msg: fmt.Sprintf("todavía no hay módulo de cluster para el provider %s", providerKind)}
+		}
+		return m, nil
+	}
+	m, ok := FindModuleByPath(modulePath)
+	if !ok {
+		return Module{}, &InputError{Name: "module", Msg: fmt.Sprintf("módulo %q desconocido", modulePath)}
+	}
+	if m.Provider != providerKind {
+		return Module{}, &InputError{Name: "module", Msg: fmt.Sprintf("el módulo %s es de %s y la cuenta es de %s", m.Module, m.Provider, providerKind)}
+	}
+	if !m.Available {
+		return Module{}, &InputError{Name: "module", Msg: fmt.Sprintf("el módulo %s todavía no está disponible", m.Module)}
+	}
+	return m, nil
+}
+
+// CreateClusterRun crea el Cluster en Rampa (offline, con token, kind según el
+// módulo) y encola el run que lo va a levantar, en una sola transacción. Los
+// inputs guardados no llevan nada sensible: el bootstrap token (y el token del
+// agente en aws/eks-cluster) se generan y se inyectan al correr.
 func (s *Service) CreateClusterRun(ctx context.Context, req ClusterRequest) (*store.InfraRun, *store.Cluster, error) {
-	m, ok := FindModule(req.Account.Provider, store.InfraKindCluster)
-	if !ok || !m.Available {
-		return nil, nil, fmt.Errorf("no hay módulo de cluster disponible para el provider %s", req.Account.Provider)
+	m, err := ResolveModule(req.Account.Provider, req.Module)
+	if err != nil {
+		return nil, nil, err
 	}
-	if req.KubernetesVersion == "" {
-		req.KubernetesVersion = DefaultKubernetesVersion
+	typed, err := ValidateInputs(m, req.Inputs)
+	if err != nil {
+		return nil, nil, err
 	}
-	arns := req.AdminPrincipalARNs
-	if arns == nil {
-		arns = []string{}
+	secretStore := req.SecretStore
+	if secretStore == "" {
+		secretStore = m.SecretStore
 	}
 	repo, tag := splitImage(s.cfg.AgentImage)
 	inputs := map[string]any{
 		"region":                 req.Account.Region,
 		"name":                   req.Name,
 		"env":                    req.Env,
-		"kubernetes_version":     req.KubernetesVersion,
-		"admin_principal_arns":   arns,
-		"install_agent":          true,
 		"api_url":                s.cfg.PublicURL,
+		"agent_chart_url":        s.AgentChartURL(),
 		"agent_image_repository": repo,
 		"agent_image_tag":        tag,
 	}
-	if req.VPCCIDR != "" {
-		inputs["vpc_cidr"] = req.VPCCIDR
+	if m.HasVariable("domain") {
+		inputs["domain"] = req.Domain
+	}
+	if m.HasVariable("install_agent") {
+		inputs["install_agent"] = true
+	}
+	for k, v := range typed {
+		inputs[k] = v
 	}
 	inputsJSON, err := json.Marshal(inputs)
 	if err != nil {
 		return nil, nil, err
 	}
-	// El token del cluster se rota al ejecutar (helm lo instala con el nuevo);
+	// El token del cluster se rota al ejecutar (o lo canjea el bootstrap);
 	// este solo existe para que la fila tenga un hash válido.
 	_, clusterHash, err := auth.NewClusterToken()
 	if err != nil {
@@ -245,14 +293,14 @@ func (s *Service) CreateClusterRun(ctx context.Context, req ClusterRequest) (*st
 	err = s.st.WithTx(ctx, func(tx *store.Store) error {
 		var err error
 		cl, err = tx.CreateCluster(ctx, &store.Cluster{
-			OrgID: req.OrgID, CloudAccountID: req.Account.ID, Name: req.Name, Env: req.Env, TokenHash: clusterHash,
-			Domain: req.Domain, IngressClass: req.IngressClass, SecretStore: req.SecretStore,
+			OrgID: req.OrgID, CloudAccountID: req.Account.ID, Name: req.Name, Kind: m.ClusterKind(), Env: req.Env, TokenHash: clusterHash,
+			Domain: req.Domain, IngressClass: req.IngressClass, SecretStore: secretStore,
 		})
 		if err != nil {
 			return err
 		}
 		run, err = tx.CreateInfraRun(ctx, &store.InfraRun{
-			OrgID: req.OrgID, Kind: store.InfraKindCluster, Provider: req.Account.Provider, Module: m.Module,
+			OrgID: req.OrgID, Kind: m.Kind, Provider: req.Account.Provider, Module: m.Module,
 			CloudAccountID: req.Account.ID, ClusterID: cl.ID, Name: req.Name, Operation: store.InfraOpApply,
 			Inputs: inputsJSON, StateTokenHash: stateHash, RequestedBy: req.RequestedBy,
 		})
@@ -268,7 +316,7 @@ func (s *Service) CreateClusterRun(ctx context.Context, req ClusterRequest) (*st
 	if err != nil {
 		return nil, nil, err
 	}
-	s.bus.Emit(ctx, req.OrgID, req.Actor, "cluster.created", "cluster", cl.ID, "cluster "+cl.Name+" ("+cl.Env+") creado; OpenTofu lo va a levantar", map[string]string{"name": cl.Name, "env": cl.Env, "domain": cl.Domain, "infra_run_id": run.ID})
+	s.bus.Emit(ctx, req.OrgID, req.Actor, "cluster.created", "cluster", cl.ID, "cluster "+cl.Name+" ("+cl.Env+", "+cl.Kind+") creado; OpenTofu lo va a levantar con "+m.Module, map[string]string{"name": cl.Name, "kind": cl.Kind, "env": cl.Env, "domain": cl.Domain, "infra_run_id": run.ID, "module": m.Module})
 	s.emitStatus(ctx, run, req.Actor)
 	s.Notify()
 	return run, cl, nil
@@ -409,6 +457,7 @@ func (s *Service) execute(parent context.Context, run *store.InfraRun) {
 		s.finish(bg, run, actor, store.InfraRunFailed, "no pude abrir el log del run: "+err.Error(), nil)
 		return
 	}
+	lg.red.add(stateToken)
 	lg.line(fmt.Sprintf("== rampa: tofu %s de %s (intento %d) ==", run.Operation, run.Module, run.Attempt))
 
 	outputs, runErr := s.steps(ctx, run, stateToken, lg, actor)
@@ -420,7 +469,7 @@ func (s *Service) execute(parent context.Context, run *store.InfraRun) {
 		lg.line("== rampa: apply completo ==")
 		s.finish(bg, run, actor, store.InfraRunSucceeded, "", outputs)
 	default:
-		msg := runErr.Error()
+		msg := lg.red.redact(runErr.Error())
 		if parent.Err() != nil {
 			msg = StoppedMessage
 		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -458,34 +507,72 @@ func (s *Service) steps(ctx context.Context, run *store.InfraRun, stateToken str
 	if inputs == nil {
 		inputs = map[string]any{}
 	}
-	inputs["agent_chart_path"] = wd.AgentChartPath
+	if m.HasVariable("agent_chart_path") {
+		inputs["agent_chart_path"] = wd.AgentChartPath
+	}
+	// Solo las variables que el root declara: un input viejo no rompe el run.
+	for k := range inputs {
+		if !m.HasVariable(k) {
+			delete(inputs, k)
+		}
+	}
 	if err := wd.WriteTFVars(inputs); err != nil {
 		return nil, fmt.Errorf("escribiendo %s: %w", TFVarsFile, err)
 	}
 	lg.line("directorio de trabajo preparado: módulo " + m.Module + " y chart rampa-agent")
 
+	pacc, err := s.providerAccount(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	credsFn := s.credentials
 	s.mu.RUnlock()
-	creds, err := credsFn(provider.WithRunID(ctx, run.ID), toProviderAccount(acc))
+	creds, err := credsFn(provider.WithRunID(ctx, run.ID), pacc)
 	if err != nil {
 		return nil, fmt.Errorf("obteniendo credenciales de la cuenta %s: %w", acc.Name, err)
 	}
-	lg.line(fmt.Sprintf("credenciales temporales obtenidas para la cuenta %s (vencen %s)", acc.Name, creds.Expires.UTC().Format(time.RFC3339)))
+	if creds.Expires.IsZero() {
+		lg.line(fmt.Sprintf("credenciales de la cuenta %s cargadas (token de larga duración, cifrado en Rampa)", acc.Name))
+	} else {
+		lg.line(fmt.Sprintf("credenciales temporales obtenidas para la cuenta %s (vencen %s)", acc.Name, creds.Expires.UTC().Format(time.RFC3339)))
+	}
 
+	// Los valores secretos que el subproceso podría imprimir no llegan al log.
+	lg.red.add(stateToken, creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken)
+	for _, v := range creds.Env {
+		lg.red.add(v)
+	}
 	env := s.subprocessEnv(run, wd, stateToken, creds, acc)
-	if run.Operation == store.InfraOpApply && run.Kind == store.InfraKindCluster && run.ClusterID != "" {
-		// El agente se instala con un token nuevo que solo vive en el entorno
-		// del subproceso; el hash queda en el cluster.
-		plain, hash, err := auth.NewClusterToken()
+	if run.Operation == store.InfraOpApply && run.CreatesCluster() {
+		// El agente se instala con un bootstrap token de un solo uso que solo
+		// vive en el entorno del subproceso (TF_VAR_bootstrap_token); el módulo
+		// lo pone en el cloud-init o en el chart y el agente lo canjea por el
+		// token real en POST /v1/agent/bootstrap. En la base queda solo el hash.
+		plain, hash, err := auth.NewBootstrapToken()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := s.st.RotateClusterToken(ctx, run.OrgID, run.ClusterID, hash); err != nil {
-			return nil, fmt.Errorf("rotando el token del cluster: %w", err)
+		if _, err := s.st.CreateBootstrapToken(ctx, run.OrgID, run.ClusterID, hash, time.Now().Add(BootstrapTokenTTL), run.RequestedBy); err != nil {
+			return nil, fmt.Errorf("creando el bootstrap token del cluster: %w", err)
 		}
-		env = append(env, "TF_VAR_agent_token="+plain)
-		lg.line("token del agente generado; se instala con Helm dentro del apply")
+		lg.red.add(plain)
+		env = append(env, "TF_VAR_bootstrap_token="+plain)
+		lg.line(fmt.Sprintf("bootstrap token del agente generado (vence en %s); el agente lo canjea al arrancar", BootstrapTokenTTL))
+		if m.HasVariable("agent_token") {
+			// aws/eks-cluster sigue aceptando el token del cluster para instalar el
+			// agente con Helm en el mismo apply: se rota y solo el hash queda.
+			plain, hash, err := auth.NewClusterToken()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := s.st.RotateClusterToken(ctx, run.OrgID, run.ClusterID, hash); err != nil {
+				return nil, fmt.Errorf("rotando el token del cluster: %w", err)
+			}
+			lg.red.add(plain)
+			env = append(env, "TF_VAR_agent_token="+plain)
+			lg.line("token del agente generado; se instala con Helm dentro del apply")
+		}
 	}
 
 	tofu := func(sub string, extra ...string) error {
@@ -604,6 +691,7 @@ func (s *Service) runTofu(ctx context.Context, dir string, env []string, lg *run
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			line := sc.Text()
+			line = lg.red.redact(line)
 			tail.add(line)
 			lg.line(line)
 		}
@@ -694,7 +782,7 @@ func (s *Service) finish(ctx context.Context, run *store.InfraRun, actor store.A
 }
 
 func (s *Service) afterSuccess(ctx context.Context, run *store.InfraRun, actor store.Actor) {
-	if run.Kind != store.InfraKindCluster || run.ClusterID == "" {
+	if !run.CreatesCluster() {
 		return
 	}
 	var outputs map[string]json.RawMessage
@@ -709,11 +797,11 @@ func (s *Service) afterSuccess(ctx context.Context, run *store.InfraRun, actor s
 	}
 	s.bus.Emit(ctx, run.OrgID, actor, "cluster.infra_ready", "cluster", run.ClusterID,
 		fmt.Sprintf("la infraestructura del cluster %s está lista; el agente se está conectando", run.Name),
-		map[string]any{"run_id": run.ID, "name": run.Name, "agent_role_arn": roleARN})
+		map[string]any{"run_id": run.ID, "name": run.Name, "agent_role_arn": roleARN, "kind": run.Kind})
 }
 
 func (s *Service) afterFailure(ctx context.Context, run *store.InfraRun, actor store.Actor) {
-	if run.Kind != store.InfraKindCluster || run.ClusterID == "" {
+	if !run.CreatesCluster() {
 		return
 	}
 	if err := s.st.SetClusterInfraResult(ctx, run.OrgID, run.ClusterID, "", store.ClusterFailed); err != nil {
@@ -722,7 +810,7 @@ func (s *Service) afterFailure(ctx context.Context, run *store.InfraRun, actor s
 }
 
 func (s *Service) afterDestroy(ctx context.Context, run *store.InfraRun, actor store.Actor) {
-	if run.Kind != store.InfraKindCluster || run.ClusterID == "" {
+	if !run.CreatesCluster() {
 		return
 	}
 	err := s.st.DeleteCluster(ctx, run.OrgID, run.ClusterID)
@@ -756,6 +844,8 @@ type runLogger struct {
 	run *store.InfraRun
 	mu  sync.Mutex
 	seq int
+	// red oculta los secretos conocidos del run en cada línea.
+	red redactor
 }
 
 func newRunLogger(ctx context.Context, s *Service, run *store.InfraRun) (*runLogger, error) {
@@ -768,6 +858,7 @@ func newRunLogger(ctx context.Context, s *Service, run *store.InfraRun) (*runLog
 
 // line agrega una línea. Errores de persistencia se loguean y no frenan el run.
 func (l *runLogger) line(text string) {
+	text = l.red.redact(text)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seq++
@@ -834,6 +925,29 @@ func toProviderAccount(acc *store.CloudAccount) provider.CloudAccount {
 		ID: acc.ID, OrgID: acc.OrgID, Kind: provider.Kind(acc.Provider), Name: acc.Name,
 		ExternalRef: acc.ExternalRef, Region: acc.Region, Settings: settings,
 	}
+}
+
+// providerAccount arma la cuenta para el provider y, si tiene credenciales
+// cifradas (providers con auth token), las descifra en memoria. Nunca se
+// loguean ni se escriben a disco.
+func (s *Service) providerAccount(ctx context.Context, acc *store.CloudAccount) (provider.CloudAccount, error) {
+	pacc := toProviderAccount(acc)
+	if !acc.HasCredentials {
+		return pacc, nil
+	}
+	if s.cipher == nil {
+		return pacc, fmt.Errorf("la cuenta %s tiene credenciales cifradas pero falta RAMPA_STATE_KEY para descifrarlas", acc.Name)
+	}
+	ct, err := s.st.GetCloudAccountCredentials(ctx, acc.OrgID, acc.ID)
+	if err != nil {
+		return pacc, fmt.Errorf("leyendo las credenciales de la cuenta %s: %w", acc.Name, err)
+	}
+	creds, err := s.cipher.OpenCredentials(acc.ID, ct)
+	if err != nil {
+		return pacc, err
+	}
+	pacc.Credentials = creds
+	return pacc, nil
 }
 
 // splitImage separa "repo:tag". Un ":" dentro del host (puerto) no cuenta.

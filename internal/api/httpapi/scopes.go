@@ -20,6 +20,7 @@ import (
 
 type scopeResponse struct {
 	Name              string              `json:"name"`
+	Compute           string              `json:"compute"`
 	Ephemeral         bool                `json:"ephemeral"`
 	Declared          bool                `json:"declared"`
 	ClusterID         string              `json:"cluster_id"`
@@ -106,11 +107,14 @@ func ttlFor(spec manifest.Scope, ephemeral bool, now time.Time) *time.Time {
 }
 
 func (a *API) scopeResponse(ctx context.Context, orgID string, m *manifest.Application, name string, row *store.Scope, clusters map[string]*store.Cluster) (*scopeResponse, error) {
-	resp := &scopeResponse{Name: name, Namespace: m.Namespace(name), Status: store.ScopeUnbound}
+	resp := &scopeResponse{Name: name, Compute: manifest.ComputeKubernetes, Namespace: m.Namespace(name), Status: store.ScopeUnbound}
 	spec, ephemeral, err := m.ResolveScope(name)
 	if err == nil {
 		resp.Declared = !ephemeral
 		resp.Ephemeral = ephemeral
+		if spec.Compute != "" {
+			resp.Compute = spec.Compute
+		}
 		resp.Size = spec.Size
 		resp.Replicas = spec.Replicas
 		resp.Strategy = spec.Strategy

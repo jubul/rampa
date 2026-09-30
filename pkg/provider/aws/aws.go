@@ -164,6 +164,22 @@ func (p *Provider) DisplayName() string { return "Amazon Web Services" }
 // Available implementa provider.Provider. AWS está completo en la Fase A.
 func (p *Provider) Available() bool { return true }
 
+// Auth implementa provider.Provider: rol IAM asumido por federación, sin secretos.
+func (p *Provider) Auth() provider.AuthKind { return provider.AuthFederated }
+
+// Terminology implementa provider.Provider con los nombres de AWS.
+func (p *Provider) Terminology() provider.Terminology {
+	return provider.Terminology{
+		Account:     provider.LocalizedTerm{ES: "cuenta de AWS", EN: "AWS account"},
+		Project:     provider.LocalizedTerm{ES: "cuenta de AWS", EN: "AWS account"},
+		Cluster:     provider.LocalizedTerm{ES: "cluster EKS", EN: "EKS cluster"},
+		VM:          provider.LocalizedTerm{ES: "instancia EC2", EN: "EC2 instance"},
+		Registry:    provider.LocalizedTerm{ES: "ECR", EN: "ECR"},
+		SecretStore: provider.LocalizedTerm{ES: "Secrets Manager", EN: "Secrets Manager"},
+		Region:      provider.LocalizedTerm{ES: "región", EN: "region"},
+	}
+}
+
 // ConnectInstructions arma las instrucciones para crear el rol con
 // CloudFormation. La consola solo acepta plantillas alojadas en S3: si
 // Config.TemplateURL está seteada, hay link de quick-create y el comando usa

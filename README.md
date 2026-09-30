@@ -23,7 +23,7 @@ Rampa toma el modelo que Mercado Libre construyó para sí misma con Fury, cinco
 
 ## Qué hace
 
-- **Infraestructura con clicks.** Conectás una cuenta de AWS con un stack de CloudFormation que crea un rol asumible, sin access keys. Desde ahí, Rampa crea por vos un cluster EKS con Auto Mode, red, IRSA y el agente ya instalado, ejecutando OpenTofu con tu identidad. El mismo mecanismo va a servir para GKE, AKS y las demás nubes: un módulo por proveedor.
+- **Infraestructura con clicks, en varias nubes.** Conectás una cuenta (AWS por rol asumible sin access keys; DigitalOcean con un token de alcance mínimo) y Rampa crea por vos lo que elijas ejecutando OpenTofu con tu identidad: un cluster EKS con Auto Mode, un cluster DOKS, o una máquina de un nodo con k3s (instancia EC2 o Droplet), siempre con el agente ya instalado. Cada nube habla con su terminología. GKE, AKS, OCI y OVH siguen con el mismo mecanismo: un módulo por proveedor.
 - **Aplicaciones sin YAML.** Un asistente de cinco pasos arma la aplicación: básicos, scopes, parameters, services, revisión. El resultado es un `rampa.yaml` que podés descargar dentro de un proyecto inicial listo para hacer push. Si preferís escribirlo a mano, es el mismo archivo.
 - **Deploys que se ven.** Cada deploy es una fila con quién, qué imagen y cómo terminó, con el rollout en vivo. Producción puede exigir aprobación. Cada pull request tiene su entorno efímero con URL, y se destruye al cerrarlo.
 - **Seguridad por diseño.** Credenciales de nube por federación, secretos de aplicación en el gestor de secretos de tu nube, agente con conexión saliente y RBAC documentado permiso por permiso, estado de OpenTofu cifrado, aislamiento por organización en cada tabla y cada query.
@@ -68,7 +68,7 @@ make help             # todos los targets
 | `pkg/` | Compartidos: `manifest` (el `rampa.yaml` y su spec estructurado), `render`, `protocol` (API-agente), `provider` (AWS, GCP, Azure), `scaffold`. |
 | `charts/rampa-app/` | El chart único con el que se despliega toda aplicación. Embebido en la API. |
 | `charts/rampa-agent/` | El chart que instala el agente. Embebido en la API para que el runner lo instale al crear clusters. |
-| `terraform/modules/<nube>/` | Módulos OpenTofu: `aws/eks-cluster` (cluster listo con agente), `aws/postgres` (primer service). Embebidos en la API. |
+| `terraform/modules/<nube>/` | Módulos OpenTofu embebidos en la API: `aws/eks-cluster` (EKS Auto Mode con agente), `aws/ec2-k3s` (instancia EC2 con k3s), `digitalocean/droplet-k3s` (Droplet con k3s), `digitalocean/doks-cluster` (DOKS con agente), `aws/postgres` (primer service). |
 | `web/` | El panel: React 19, TypeScript, Vite, Tailwind, TanStack Query. Onboarding, asistente de apps, infraestructura, deploys en vivo. |
 | `docs/` | Toda la documentación. Índice abajo. |
 | `.github/workflows/` | La CI de este repo y los workflows reusables que las apps de los clientes llaman para construir y desplegar. |
@@ -82,7 +82,8 @@ make help             # todos los targets
 | [`docs/modelo.md`](docs/modelo.md) | El contrato con el developer: application, scope, deployment, parameters, services, y el `rampa.yaml`. |
 | [`docs/api.md`](docs/api.md) | La API v1 completa, la referencia que implementan API, web y CLI. Incluye variables de configuración. |
 | [`docs/arquitectura-producto.md`](docs/arquitectura-producto.md) | Cómo está hecho: plano de control, agente, runner, providers, modelo de datos, flujos, roadmap. |
-| [`docs/adr/`](docs/adr/) | Las decisiones y por qué: fundaciones, producto SaaS, infraestructura con clicks vía OpenTofu. |
+| [`docs/adr/`](docs/adr/) | Las decisiones y por qué: fundaciones, producto SaaS, infraestructura con clicks vía OpenTofu, runtimes y VMs con k3s, más nubes, idiomas. |
+| [`docs/seguridad.md`](docs/seguridad.md) | Qué protege Rampa y cómo: aislamiento, credenciales, agente, infraestructura, lo que asumimos del cliente y lo que falta. |
 | [`docs/instalar-agente.md`](docs/instalar-agente.md) | Instalar el agente en un cluster existente y darle identidad de nube. Permisos justificados uno a uno. |
 | [`docs/cli.md`](docs/cli.md) | Referencia del CLI y uso desde CI. |
 | [`docs/convenciones.md`](docs/convenciones.md) | Nombres, labels, rutas de secretos. |

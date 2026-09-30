@@ -21,6 +21,30 @@ func TestMigrationVersions(t *testing.T) {
 	}
 }
 
+func TestMigration0003(t *testing.T) {
+	vs := MigrationVersions()
+	if len(vs) < 3 || vs[2] != "0003_runtimes_multicloud" {
+		t.Fatalf("migraciones embebidas: %v", vs)
+	}
+	b, err := migrationsFS.ReadFile("migrations/0003_runtimes_multicloud.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ALTER TABLE cloud_accounts ADD COLUMN credentials_ciphertext bytea",
+		"'digitalocean', 'oci', 'ovh'",
+		"ALTER TABLE clusters ADD COLUMN kind text NOT NULL DEFAULT 'kubernetes'",
+		"CREATE TABLE cluster_bootstrap_tokens (",
+		"token_hash  text NOT NULL UNIQUE",
+		"CREATE TABLE scope_secret_keys (",
+		"ALTER TABLE users ADD COLUMN locale text NOT NULL DEFAULT ''",
+	} {
+		if !contains(string(b), want) {
+			t.Errorf("la migración 0003 no tiene %q", want)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {

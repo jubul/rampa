@@ -43,7 +43,7 @@ COPY --from=tofu /out/tofu /usr/local/bin/tofu
 # RAMPA_TOFU_BIN default "tofu" lo encuentra en el PATH de la imagen (/usr/local/bin).
 # Los runs escriben en RAMPA_INFRA_WORKDIR (default /tmp) y cachean providers ahí.
 ENV RAMPA_LISTEN=:8080 RAMPA_WEB_DIR=/web RAMPA_INFRA_WORKDIR=/tmp
-USER nonroot:nonroot
+USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/rampa-api"]
 CMD ["serve"]

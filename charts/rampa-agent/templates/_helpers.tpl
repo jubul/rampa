@@ -63,14 +63,33 @@ Nombre del ServiceAccount que usa el agente.
 {{- end }}
 
 {{/*
-Nombre del Secret que contiene el token del cluster: el existente o el que crea el chart.
+Nombre del Secret que contiene el token del cluster: el existente, el que crea
+el chart con cluster.token o, con bootstrapToken, el que escribe el agente al
+canjearlo (nombre fijo rampa-agent-token, ver internal/agent/bootstrap).
 */}}
 {{- define "rampa-agent.tokenSecretName" -}}
 {{- if .Values.cluster.existingSecret }}
 {{- .Values.cluster.existingSecret }}
+{{- else if .Values.cluster.bootstrapToken }}
+{{- include "rampa-agent.agentTokenSecretName" . }}
 {{- else }}
 {{- printf "%s-token" (include "rampa-agent.fullname" .) }}
 {{- end }}
+{{- end }}
+
+{{/*
+Nombre fijo del Secret donde el agente guarda el token que obtiene por bootstrap.
+Tiene que coincidir con bootstrap.SecretName del agente y con el resourceNames del Role.
+*/}}
+{{- define "rampa-agent.agentTokenSecretName" -}}
+rampa-agent-token
+{{- end }}
+
+{{/*
+Nombre del Secret con el bootstrap token que crea el chart.
+*/}}
+{{- define "rampa-agent.bootstrapSecretName" -}}
+{{- printf "%s-bootstrap" (include "rampa-agent.fullname" .) }}
 {{- end }}
 
 {{/*
@@ -79,8 +98,14 @@ instala con --skip-schema-validation el error tiene que seguir siendo legible.
 */}}
 {{- define "rampa-agent.validate" -}}
 {{- $_ := required "api.url es requerido: la URL del plano de control de Rampa, por ejemplo https://api.rampa.dev" .Values.api.url }}
-{{- if and (not .Values.cluster.token) (not .Values.cluster.existingSecret) }}
-{{- fail "hace falta cluster.token (el token que entrega la web al crear el cluster) o cluster.existingSecret (un Secret con la clave token)" }}
+{{- $sources := 0 }}
+{{- if .Values.cluster.token }}{{ $sources = add1 $sources }}{{ end }}
+{{- if .Values.cluster.existingSecret }}{{ $sources = add1 $sources }}{{ end }}
+{{- if .Values.cluster.bootstrapToken }}{{ $sources = add1 $sources }}{{ end }}
+{{- if eq (int $sources) 0 }}
+{{- fail "hace falta exactamente uno de cluster.token (el token que entrega la web al crear el cluster), cluster.existingSecret (un Secret con la clave token) o cluster.bootstrapToken (token de bootstrap de un solo uso)" }}
+{{- else if gt (int $sources) 1 }}
+{{- fail "cluster.token, cluster.existingSecret y cluster.bootstrapToken son mutuamente excluyentes: dejá solo uno" }}
 {{- end }}
 {{- if ne (int .Values.replicaCount) 1 }}
 {{- fail "replicaCount tiene que ser 1: hay exactamente un agente por cluster" }}

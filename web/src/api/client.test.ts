@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apps, auth, cloudAccounts, deployments, errorMessage, events, isApiError, openEvents } from "./client";
+import { ApiError, apps, auth, clusters, cloudAccounts, deployments, errorMessage, events, isApiError, openEvents, scopeSecrets } from "./client";
+import i18n from "../i18n";
 import { EVENT_KINDS } from "./types";
 
 type FetchMock = ReturnType<typeof vi.fn<typeof fetch>>;
@@ -96,6 +97,46 @@ describe("request", () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(cloudAccounts.remove("acme", "c1")).resolves.toBeNull();
     expect(fetchMock.mock.calls[0]![1]?.method).toBe("DELETE");
+  });
+
+  it("manda Accept-Language con el idioma activo en todas las llamadas", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, { items: [] })));
+    await apps.list("acme");
+    expect((fetchMock.mock.calls[0]![1]?.headers as Record<string, string>)["Accept-Language"]).toBe("es");
+    await i18n.changeLanguage("en");
+    try {
+      await deployments.list("acme", "app", "dev");
+      await auth.patchMe({ locale: "en" });
+      for (const call of fetchMock.mock.calls.slice(1)) {
+        expect((call[1]?.headers as Record<string, string>)["Accept-Language"]).toBe("en");
+      }
+      const patch = fetchMock.mock.calls[2]!;
+      expect(patch[0]).toBe("/v1/me");
+      expect(patch[1]?.method).toBe("PATCH");
+      expect(JSON.parse(String(patch[1]?.body))).toEqual({ locale: "en" });
+      expect(errorMessage("x")).toBe("An unexpected error occurred");
+    } finally {
+      await i18n.changeLanguage("es");
+    }
+  });
+
+  it("install-command es un GET y los secretos van por PUT con values", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { install_command: "helm ..." }));
+    const r = await clusters.installCommand("acme", "c1");
+    expect(r.install_command).toBe("helm ...");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/v1/orgs/acme/clusters/c1/install-command");
+    expect(fetchMock.mock.calls[0]![1]?.method).toBe("GET");
+
+    fetchMock.mockResolvedValue(jsonResponse(202, { keys: ["API_KEY"] }));
+    await scopeSecrets.put("acme", "checkout", "prod", { values: { API_KEY: "s3cr3t" } });
+    const [url, init] = fetchMock.mock.calls[1]!;
+    expect(url).toBe("/v1/orgs/acme/apps/checkout/scopes/prod/secrets");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ values: { API_KEY: "s3cr3t" } });
+
+    fetchMock.mockResolvedValue(jsonResponse(409, { error: { code: "conflict", message: "agente offline" } }));
+    const err = (await scopeSecrets.put("acme", "checkout", "dev", { values: { A: "b" } }).catch((e: unknown) => e)) as ApiError;
+    expect(err.isConflict).toBe(true);
   });
 
   it("PATCH de cuenta manda external_ref y settings", async () => {

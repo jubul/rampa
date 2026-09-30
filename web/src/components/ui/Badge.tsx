@@ -3,12 +3,12 @@ import { cn } from "../../lib/cn";
 import type { Tone } from "../../lib/status";
 
 const tones: Record<Tone, string> = {
-  green: "bg-green-50 text-green-700 ring-green-600/20",
-  red: "bg-red-50 text-red-700 ring-red-600/20",
-  amber: "bg-amber-50 text-amber-800 ring-amber-600/20",
-  violet: "bg-violet-50 text-violet-700 ring-violet-600/20",
-  gray: "bg-slate-100 text-slate-600 ring-slate-500/20",
-  blue: "bg-blue-50 text-blue-700 ring-blue-600/20",
+  green: "bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-300 ring-green-600/20 dark:ring-green-400/30",
+  red: "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 ring-red-600/20 dark:ring-red-400/30",
+  amber: "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 ring-amber-600/20 dark:ring-amber-400/30",
+  violet: "bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 ring-violet-600/20 dark:ring-violet-400/30",
+  gray: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 ring-slate-500/20 dark:ring-slate-400/30",
+  blue: "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 ring-blue-600/20 dark:ring-blue-400/30",
 };
 
 export function Badge({

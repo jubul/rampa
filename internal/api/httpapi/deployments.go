@@ -16,6 +16,7 @@ import (
 	"rampa.dev/internal/api/auth"
 	"rampa.dev/internal/api/deploy"
 	"rampa.dev/internal/api/store"
+	"rampa.dev/pkg/manifest"
 	"rampa.dev/pkg/protocol"
 )
 
@@ -153,6 +154,10 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) {
 	spec, ephemeral, err := resolveScopeSpec(m, scopeName)
 	if err != nil {
 		a.fail(w, r, err, "")
+		return
+	}
+	if spec.Compute == manifest.ComputeServerless {
+		a.fail(w, r, notImplemented(fmt.Sprintf("serverless llega en la ola dos: el scope %s declara compute serverless y hoy solo se despliega compute kubernetes", scopeName)), "")
 		return
 	}
 	scopeRow, err := a.Store.GetScope(ctx, oc.Org.ID, appRow.ID, scopeName)

@@ -1,7 +1,8 @@
 import { safeHttpUrl } from "../lib/url";
 import { useMemo, useState, type FormEvent } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Check, Download, ExternalLink, FileCode2, Link2, Pencil, Rocket, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, Download, ExternalLink, FileCode2, KeyRound, Link2, Pencil, Plus, Rocket, Trash2, X } from "lucide-react";
 import {
   useApp,
   useAppDeployments,
@@ -12,8 +13,10 @@ import {
   useCreateDeployment,
   useEvents,
   useOrg,
+  usePutScopeSecrets,
   useRemoveApp,
   useRemoveScope,
+  useScopeSecretKeys,
   useScopes,
   useUpdateManifest,
 } from "../api/hooks";
@@ -39,18 +42,24 @@ import { EventList } from "../components/EventList";
 import { TierBadge } from "./AppsPage";
 import { scaffoldUrl } from "../api/client";
 import { formatDateTime, formatRelative, shortId, shortImage } from "../lib/format";
+import { useClusterTerms, useTerms } from "../hooks/useTerms";
+import { ClusterKindBadge } from "../components/ClusterKindBadge";
+import { isApiError } from "../api/client";
+import { validateParamName } from "../lib/spec";
+import { cap } from "../lib/terminology";
 
 export function AppDetailPage() {
+  const { t } = useTranslation();
   const { org = "", app = "" } = useParams();
   const navigate = useNavigate();
   const appQ = useApp(org, app);
 
-  if (appQ.isPending) return <LoadingState label="Cargando aplicación" />;
+  if (appQ.isPending) return <LoadingState label={t("appDetail.loading")} />;
   if (appQ.isError) {
     return (
       <>
         <BackLink org={org} />
-        <ErrorState title="No se pudo cargar la aplicación" error={appQ.error} onRetry={() => void appQ.refetch()} />
+        <ErrorState title={t("appDetail.loadError")} error={appQ.error} onRetry={() => void appQ.refetch()} />
       </>
     );
   }
@@ -58,14 +67,18 @@ export function AppDetailPage() {
 }
 
 function BackLink({ org }: { org: string }) {
+  const { t } = useTranslation();
   return (
-    <Link to={`/o/${org}/apps`} className="mb-3 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-900">
-      <ArrowLeft className="size-3.5" /> Aplicaciones
+    <Link to={`/o/${org}/apps`} className="mb-3 inline-flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100">
+      <ArrowLeft className="size-3.5" /> {t("nav.apps")}
     </Link>
   );
 }
 
 function AppDetail({ org, application, onDeleted }: { org: string; application: Application; onDeleted: () => void }) {
+  const { t } = useTranslation();
+  const clusterTerms = useClusterTerms(org);
+  const generic = useTerms(org).terms();
   const app = application.name;
   const { isAdmin, isDeveloper } = useOrgRole(org);
   const orgQ = useOrg(org);
@@ -115,23 +128,23 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
             <TierBadge tier={application.tier} />
           </span>
         }
-        description={application.description || `${application.type} en ${application.runtime}`}
+        description={application.description || t("appDetail.typeIn", { type: application.type, runtime: application.runtime })}
         actions={
           <>
             {isDeveloper ? (
               <LinkButton to={`/o/${org}/apps/${app}/edit`} icon={<Pencil className="size-4" />}>
-                Editar
+                {t("appDetail.edit")}
               </LinkButton>
             ) : (
-              <Button disabled title="Necesitás rol developer" icon={<Pencil className="size-4" />}>
-                Editar
+              <Button disabled title={t("common.needDeveloper")} icon={<Pencil className="size-4" />}>
+                {t("appDetail.edit")}
               </Button>
             )}
             <Button variant="secondary" disabled={!isDeveloper} icon={<FileCode2 className="size-4" />} onClick={() => setManifestOpen(true)}>
-              Editar YAML
+              {t("appDetail.editYaml")}
             </Button>
-            <Button variant="ghost" disabled={!isDeveloper} icon={<Trash2 className="size-4 text-red-600" />} onClick={() => setDeleteAppOpen(true)}>
-              Eliminar
+            <Button variant="ghost" disabled={!isDeveloper} icon={<Trash2 className="size-4 text-red-600 dark:text-red-400" />} onClick={() => setDeleteAppOpen(true)}>
+              {t("common.delete")}
             </Button>
           </>
         }
@@ -140,16 +153,16 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
       <Card>
         <CardBody>
           <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
-            <Meta label="Equipo" value={application.team} />
-            <Meta label="Tipo" value={application.type} mono />
+            <Meta label={t("apps.colTeam")} value={application.team} />
+            <Meta label={t("apps.colType")} value={application.type} mono />
             <Meta label="Runtime" value={application.runtime || "-"} mono />
             <Meta label="Manifest" value={shortId(application.manifest_sha)} mono title={application.manifest_sha} />
-            <Meta label="Actualizada" value={formatRelative(application.updated_at)} title={application.updated_at} />
+            <Meta label={t("apps.colUpdated")} value={formatRelative(application.updated_at)} title={application.updated_at} />
             <div>
-              <dt className="text-xs text-slate-500">Repositorio</dt>
+              <dt className="text-xs text-slate-500 dark:text-slate-400">{t("apps.colRepo")}</dt>
               <dd className="mt-0.5 truncate">
                 {safeHttpUrl(application.repo_url) ? (
-                  <a href={safeHttpUrl(application.repo_url)!} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-slate-800 hover:underline">
+                  <a href={safeHttpUrl(application.repo_url)!} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-slate-800 dark:text-slate-100 hover:underline">
                     <span className="truncate">{application.repo_url.replace(/^https?:\/\//, "")}</span>
                     <ExternalLink className="size-3 shrink-0" />
                   </a>
@@ -162,15 +175,15 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
         </CardBody>
       </Card>
 
-      <div className="mt-6 flex gap-1 border-b border-slate-200" role="tablist" aria-label="Secciones de la aplicación">
-        {([["general", "General"], ["yaml", "YAML"]] as const).map(([key, label]) => (
+      <div className="mt-6 flex gap-1 border-b border-slate-200 dark:border-slate-800" role="tablist" aria-label={t("appDetail.sections")}>
+        {([["general", t("appDetail.tabGeneral")], ["yaml", "YAML"]] as const).map(([key, label]) => (
           <button
             key={key}
             type="button"
             role="tab"
             aria-selected={tab === key}
             onClick={() => setTab(key)}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === key ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === key ? "border-slate-900 text-slate-900 dark:text-slate-100" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-100"}`}
           >
             {label}
           </button>
@@ -179,32 +192,33 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
 
       {tab === "yaml" && (
         <Card className="mt-6">
-          <CardHeader title="rampa.yaml" description="El manifest guardado, en solo lectura. Para cambiarlo usá Editar (asistente) o Editar YAML." />
-          <CardBody>{application.manifest ? <CodeBlock value={application.manifest} maxHeight="36rem" /> : <EmptyState title="Sin manifest" />}</CardBody>
+          <CardHeader title="rampa.yaml" description={t("appDetail.yamlDescription")} />
+          <CardBody>{application.manifest ? <CodeBlock value={application.manifest} maxHeight="36rem" /> : <EmptyState title={t("appDetail.noManifest")} />}</CardBody>
         </Card>
       )}
 
       {tab === "general" && (
       <>
       <Card className="mt-6">
-        <CardHeader title="Scopes" description="Cada scope es un namespace propio en un cluster." />
+        <CardHeader title="Scopes" description={t("appDetail.scopesDescription", { cluster: generic.cluster })} />
         {scopesQ.isPending ? (
           <LoadingState />
         ) : scopesQ.isError ? (
           <ErrorState error={scopesQ.error} onRetry={() => void scopesQ.refetch()} />
         ) : scopesQ.data.length === 0 ? (
-          <EmptyState title="El manifest no declara scopes" />
+          <EmptyState title={t("appDetail.noScopes")} />
         ) : (
           <Table>
             <THead>
               <tr>
                 <TH>Scope</TH>
-                <TH>Estado</TH>
+                <TH>{t("appDetail.colCompute")}</TH>
+                <TH>{t("dashboard.colStatus")}</TH>
                 <TH>URL</TH>
-                <TH>Imagen actual</TH>
-                <TH>Cluster</TH>
-                <TH>Config</TH>
-                <TH className="text-right">Acciones</TH>
+                <TH>{t("appDetail.colImage")}</TH>
+                <TH>{cap(generic.cluster)}</TH>
+                <TH>{t("appDetail.colConfig")}</TH>
+                <TH className="text-right">{t("clusters.colActions")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -216,30 +230,33 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                 return (
                   <TR key={s.name}>
                     <TD>
-                      <div className="flex items-center gap-2 font-medium text-slate-900">
+                      <div className="flex items-center gap-2 font-medium text-slate-900 dark:text-slate-100">
                         {s.name}
-                        {s.ephemeral && <Badge tone="violet">efímero</Badge>}
-                        {!s.declared && !s.ephemeral && <Badge tone="gray">no declarado</Badge>}
+                        {s.ephemeral && <Badge tone="violet">{t("appDetail.ephemeral")}</Badge>}
+                        {!s.declared && !s.ephemeral && <Badge tone="gray">{t("appDetail.undeclared")}</Badge>}
                       </div>
-                      <div className="font-mono text-[11px] text-slate-500">{s.namespace}</div>
-                      {s.ttl_expires_at && <div className="text-xs text-slate-500">expira {formatRelative(s.ttl_expires_at)}</div>}
+                      <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{s.namespace}</div>
+                      {s.ttl_expires_at && <div className="text-xs text-slate-500 dark:text-slate-400">{t("appDetail.expires", { when: formatRelative(s.ttl_expires_at) })}</div>}
+                    </TD>
+                    <TD>
+                      <ComputeBadge compute={s.compute} />
                     </TD>
                     <TD>
                       <div className="flex flex-col gap-0.5">
                         <StatusBadge status={s.status} />
                         {s.current_deployment && s.current_deployment.status !== "healthy" && (
-                          <span className="text-xs text-slate-500">deploy: <StatusBadge status={s.current_deployment.status} /></span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{t("appDetail.deployStatus")} <StatusBadge status={s.current_deployment.status} /></span>
                         )}
                       </div>
                     </TD>
                     <TD>
                       {s.url ? (
-                        <a href={s.url} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-[14rem] items-center gap-1 text-xs text-slate-700 hover:underline">
+                        <a href={s.url} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-[14rem] items-center gap-1 text-xs text-slate-700 dark:text-slate-200 hover:underline">
                           <span className="truncate">{s.url.replace(/^https?:\/\//, "")}</span>
                           <ExternalLink className="size-3 shrink-0" />
                         </a>
                       ) : (
-                        <span className="text-xs text-slate-400">-</span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">-</span>
                       )}
                     </TD>
                     <TD className="font-mono text-xs" title={s.current_deployment?.image ?? ""}>
@@ -247,42 +264,45 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                     </TD>
                     <TD>
                       {cluster ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs">
-                          <span className={`size-1.5 rounded-full ${cluster.status === "online" ? "bg-green-500" : "bg-slate-400"}`} aria-hidden />
-                          {cluster.name}
-                        </span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span className="inline-flex items-center gap-1.5 text-xs">
+                            <span className={`size-1.5 rounded-full ${cluster.status === "online" ? "bg-green-500" : "bg-slate-400"}`} aria-hidden />
+                            {cluster.name}
+                          </span>
+                          <ClusterKindBadge cluster={cluster} terms={clusterTerms(cluster)} />
+                        </div>
                       ) : s.cluster_id ? (
                         <span className="font-mono text-xs">{shortId(s.cluster_id)}</span>
                       ) : (
-                        <span className="text-xs text-slate-400">sin atar</span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">{t("appDetail.unbound")}</span>
                       )}
                     </TD>
-                    <TD className="text-xs text-slate-600">
-                      {s.size} · {s.replicas} réplica{s.replicas === 1 ? "" : "s"} · {s.strategy}
+                    <TD className="text-xs text-slate-600 dark:text-slate-300">
+                      {s.size} · {t("appDetail.replicas", { count: s.replicas })} · {s.strategy}
                     </TD>
                     <TD>
                       <div className="flex justify-end gap-1.5">
                         {!s.cluster_id && (
-                          <Button size="sm" variant="secondary" disabled={!canDeployHere} title={!canDeployHere ? (s.name === "prod" ? "Atar cluster a prod requiere admin" : "Necesitás rol developer") : undefined} icon={<Link2 className="size-3.5" />} onClick={() => setBindScope(s)}>
-                            Atar cluster
+                          <Button size="sm" variant="secondary" disabled={!canDeployHere} title={!canDeployHere ? (s.name === "prod" ? t("appDetail.bindProdNeedsAdmin", { cluster: generic.cluster }) : t("common.needDeveloper")) : undefined} icon={<Link2 className="size-3.5" />} onClick={() => setBindScope(s)}>
+                            {t("appDetail.bind", { cluster: generic.cluster })}
                           </Button>
                         )}
                         <Button
                           size="sm"
                           disabled={!canDeployHere || busy}
-                          title={!canDeployHere ? (s.name === "prod" ? "Desplegar a prod requiere admin" : "Necesitás rol developer") : undefined}
+                          title={!canDeployHere ? (s.name === "prod" ? t("appDetail.deployProdNeedsAdmin") : t("common.needDeveloper")) : s.compute === "serverless" ? t("appDetail.serverlessTitle") : undefined}
                           icon={<Rocket className="size-3.5" />}
                           onClick={() => setDeployScope(s)}
                         >
-                          Desplegar
+                          {t("appDetail.deploy")}
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           disabled={!canDeleteHere || busy || s.status === "unbound" || s.status === "idle"}
-                          title={!canDeleteHere ? "Eliminar un scope permanente requiere admin" : "Eliminar el scope (borra el namespace)"}
-                          aria-label="Eliminar scope"
-                          icon={<Trash2 className="size-3.5 text-red-600" />}
+                          title={!canDeleteHere ? t("appDetail.deleteScopeNeedsAdmin") : t("appDetail.deleteScopeHint")}
+                          aria-label={t("appDetail.deleteScope")}
+                          icon={<Trash2 className="size-3.5 text-red-600 dark:text-red-400" />}
                           onClick={() => setScopeToDelete(s)}
                         />
                       </div>
@@ -297,23 +317,23 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
 
       <div className="mt-6 grid gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-3">
-          <CardHeader title="Historial de deployments" description="Todos los scopes, del más nuevo al más viejo." />
+          <CardHeader title={t("appDetail.history")} description={t("appDetail.historyDescription")} />
           {scopeNames.length > 0 && historyQ.isPending ? (
             <LoadingState />
           ) : historyQ.isError ? (
             <ErrorState error={historyQ.error} />
           ) : historyQ.data.length === 0 ? (
-            <EmptyState title="Todavía no hay deployments" description="Usá Desplegar en un scope para empezar." />
+            <EmptyState title={t("dashboard.noDeployments")} description={t("appDetail.noDeploymentsHint")} />
           ) : (
             <Table>
               <THead>
                 <tr>
-                  <TH>Estado</TH>
+                  <TH>{t("dashboard.colStatus")}</TH>
                   <TH>Scope</TH>
-                  <TH>Imagen</TH>
-                  <TH>Quién</TH>
-                  <TH>Cuándo</TH>
-                  <TH className="text-right">Acciones</TH>
+                  <TH>{t("dashboard.colImage")}</TH>
+                  <TH>{t("infra.colWho")}</TH>
+                  <TH>{t("dashboard.colWhen")}</TH>
+                  <TH className="text-right">{t("clusters.colActions")}</TH>
                 </tr>
               </THead>
               <TBody>
@@ -327,13 +347,13 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                         <div className="flex flex-col gap-0.5">
                           <StatusBadge status={d.status} />
                           {d.message && (
-                            <span className="max-w-[16rem] truncate text-xs text-slate-500" title={d.message}>
+                            <span className="max-w-[16rem] truncate text-xs text-slate-500 dark:text-slate-400" title={d.message}>
                               {d.message}
                             </span>
                           )}
                           {d.workload && (
-                            <span className="text-[11px] text-slate-500">
-                              {d.workload.kind}: {d.workload.ready}/{d.workload.desired} listos
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {t("appDetail.workloadReady", { kind: d.workload.kind, ready: d.workload.ready, desired: d.workload.desired })}
                             </span>
                           )}
                         </div>
@@ -344,13 +364,13 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                       </TD>
                       <TD>
                         <div className="text-xs">
-                          <div className="text-slate-800">{d.requested_by?.name || d.requested_by?.email || "-"}</div>
-                          {d.approved_by && <div className="text-slate-500">aprobó {d.approved_by.name || d.approved_by.email}</div>}
+                          <div className="text-slate-800 dark:text-slate-100">{d.requested_by?.name || d.requested_by?.email || "-"}</div>
+                          {d.approved_by && <div className="text-slate-500 dark:text-slate-400">{t("appDetail.approvedBy", { who: d.approved_by.name || d.approved_by.email })}</div>}
                         </div>
                       </TD>
-                      <TD className="text-xs text-slate-500" title={formatDateTime(d.created_at)}>
+                      <TD className="text-xs text-slate-500 dark:text-slate-400" title={formatDateTime(d.created_at)}>
                         {formatRelative(d.created_at)}
-                        {d.finished_at && <div>terminó {formatRelative(d.finished_at)}</div>}
+                        {d.finished_at && <div>{t("infraRun.finished", { when: formatRelative(d.finished_at) })}</div>}
                       </TD>
                       <TD>
                         <div className="flex justify-end gap-1.5">
@@ -358,7 +378,7 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                             <Button
                               size="sm"
                               disabled={!canApprove}
-                              title={canApprove ? undefined : "Aprobar requiere admin"}
+                              title={canApprove ? undefined : t("appDetail.approveNeedsAdmin")}
                               loading={acting && approve.isPending}
                               icon={<Check className="size-3.5" />}
                               onClick={() => {
@@ -366,7 +386,7 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                                 approve.mutate(d.id, { onSettled: () => setActingOn(null) });
                               }}
                             >
-                              Aprobar
+                              {t("appDetail.approve")}
                             </Button>
                           )}
                           {(d.status === "awaiting_approval" || d.status === "queued") && (
@@ -381,7 +401,7 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
                                 cancel.mutate(d.id, { onSettled: () => setActingOn(null) });
                               }}
                             >
-                              Cancelar
+                              {t("common.cancel")}
                             </Button>
                           )}
                         </div>
@@ -393,24 +413,30 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
             </Table>
           )}
           {(approve.isError || cancel.isError) && (
-            <div className="border-t border-slate-200 px-5 py-3">
+            <div className="border-t border-slate-200 dark:border-slate-800 px-5 py-3">
               <InlineError error={approve.isError ? approve.error : cancel.error} />
             </div>
           )}
         </Card>
 
         <Card className="lg:col-span-2">
-          <CardHeader title="Eventos" description={live.state === "open" ? "En vivo, filtrados por esta app" : "Esperando conexión en vivo"} />
+          <CardHeader title={t("appDetail.events")} description={live.state === "open" ? t("appDetail.eventsLive") : t("dashboard.activityWaiting")} />
           {eventsQ.isPending ? (
             <LoadingState />
           ) : eventsQ.isError ? (
             <ErrorState error={eventsQ.error} onRetry={() => void eventsQ.refetch()} />
           ) : (
             <div className="max-h-[70vh] overflow-y-auto">
-              <EventList events={appEvents} emptyText="Sin eventos para esta aplicación" />
+              <EventList events={appEvents} emptyText={t("appDetail.noEvents")} />
             </div>
           )}
         </Card>
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        {(scopesQ.data ?? []).map((s) => (
+          <ScopeSecretsCard key={s.name} org={org} app={app} scope={s} cluster={s.cluster_id ? clusterById.get(s.cluster_id) : undefined} canWrite={s.name === "prod" ? isAdmin : isDeveloper} />
+        ))}
       </div>
 
       <ScaffoldCard org={org} application={application} githubOrg={orgQ.data?.settings.github_org ?? ""} />
@@ -434,13 +460,13 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
           setScopeToDelete(null);
           removeScope.reset();
         }}
-        title={scopeToDelete?.ephemeral ? "Eliminar scope efímero" : "Eliminar scope permanente"}
+        title={scopeToDelete?.ephemeral ? t("appDetail.deleteEphemeral") : t("appDetail.deletePermanent")}
         description={
           scopeToDelete
-            ? `Se va a borrar el namespace ${scopeToDelete.namespace} con todo lo que tiene. ${scopeToDelete.ephemeral ? "" : "Es un scope permanente: la app deja de estar disponible en " + scopeToDelete.name + "."}`
+            ? `${t("appDetail.deleteScopeBody", { namespace: scopeToDelete.namespace })}${scopeToDelete.ephemeral ? "" : ` ${t("appDetail.deleteScopePermanent", { scope: scopeToDelete.name })}`}`
             : undefined
         }
-        confirmLabel="Eliminar scope"
+        confirmLabel={t("appDetail.deleteScope")}
         danger
         loading={removeScope.isPending}
         error={removeScope.isError ? errorMessage(removeScope.error) : null}
@@ -458,9 +484,9 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
           setDeleteAppOpen(false);
           removeApp.reset();
         }}
-        title="Eliminar aplicación"
-        description={`Se va a quitar "${app}" del catálogo. Si tiene scopes desplegados la API lo va a rechazar.`}
-        confirmLabel="Eliminar aplicación"
+        title={t("appDetail.deleteApp")}
+        description={t("appDetail.deleteAppDescription", { app })}
+        confirmLabel={t("appDetail.deleteApp")}
         danger
         loading={removeApp.isPending}
         error={removeApp.isError ? errorMessage(removeApp.error) : null}
@@ -473,8 +499,8 @@ function AppDetail({ org, application, onDeleted }: { org: string; application: 
 function Meta({ label, value, mono = false, title }: { label: string; value: string; mono?: boolean; title?: string }) {
   return (
     <div>
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className={`mt-0.5 truncate text-slate-800 ${mono ? "font-mono text-xs" : ""}`} title={title ?? value}>
+      <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+      <dd className={`mt-0.5 truncate text-slate-800 dark:text-slate-100 ${mono ? "font-mono text-xs" : ""}`} title={title ?? value}>
         {value}
       </dd>
     </div>
@@ -496,8 +522,9 @@ function DeployDialog({
   cluster: Cluster | undefined;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <Dialog open={scope !== null} onClose={onClose} title={scope ? `Desplegar ${app} a ${scope.name}` : "Desplegar"}>
+    <Dialog open={scope !== null} onClose={onClose} title={scope ? t("appDetail.deployTitle", { app, scope: scope.name }) : t("appDetail.deploy")}>
       {scope && <DeployForm key={scope.name} org={org} app={app} scope={scope} requireApprovalProd={requireApprovalProd} cluster={cluster} onClose={onClose} />}
     </Dialog>
   );
@@ -518,6 +545,10 @@ function DeployForm({
   cluster: Cluster | undefined;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
+  const ct = useClusterTerms(org)(cluster);
+  const registryTerm = ct.registry;
+  const clusterTerm = cluster?.kind === "vm" ? ct.vm : ct.cluster;
   const create = useCreateDeployment(org, app);
   const [image, setImage] = useState(scope.current_deployment?.image ?? "");
   const [message, setMessage] = useState("");
@@ -538,35 +569,40 @@ function DeployForm({
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Field label="Imagen" required help="Un tag (sha-a1b2c3d) o la referencia completa del registry.">
+      <Field label={t("dashboard.colImage")} required help={t("appDetail.imageHelp", { registry: registryTerm })}>
         {(id) => <Input id={id} required autoFocus spellCheck={false} placeholder="sha-a1b2c3d" value={image} onChange={(e) => { setImage(e.target.value); setConfirm(false); }} className="font-mono text-xs" />}
       </Field>
-      <Field label="Mensaje" help="Opcional. Queda en el historial.">
-        {(id) => <Input id={id} placeholder="Hotfix del checkout" value={message} onChange={(e) => setMessage(e.target.value)} />}
+      <Field label={t("appDetail.message")} help={t("appDetail.messageHelp")}>
+        {(id) => <Input id={id} placeholder={t("appDetail.messagePlaceholder")} value={message} onChange={(e) => setMessage(e.target.value)} />}
       </Field>
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 p-3 text-xs text-slate-600 dark:text-slate-300">
         <div>
-          Destino: <span className="font-medium text-slate-900">{scope.namespace}</span>
-          {cluster ? ` en ${cluster.name} (${cluster.status === "online" ? "en línea" : "desconectado"})` : scope.cluster_id ? "" : " (sin cluster: la API intenta elegir el único del entorno)"}
+          {t("appDetail.target")} <span className="font-medium text-slate-900 dark:text-slate-100">{scope.namespace}</span>
+          {cluster ? ` ${t("appDetail.inCluster", { name: cluster.name, status: cluster.status === "online" ? t("status.online").toLowerCase() : t("status.offline").toLowerCase() })}` : scope.cluster_id ? "" : ` ${t("appDetail.noCluster", { cluster: clusterTerm })}`}
         </div>
         <div className="mt-0.5">
-          Estrategia {scope.strategy} · {scope.size} · {scope.replicas} réplica{scope.replicas === 1 ? "" : "s"}
+          {t("appDetail.strategyLine", { strategy: scope.strategy, size: scope.size, replicas: t("appDetail.replicas", { count: scope.replicas }) })}
         </div>
       </div>
-      {isProd && requireApprovalProd && <Notice tone="blue">Es producción: el deployment va a quedar esperando la aprobación de un admin.</Notice>}
-      {cluster && cluster.status === "offline" && <Notice tone="amber">El agente del cluster está desconectado. El comando queda encolado hasta que vuelva.</Notice>}
-      {confirm && (
-        <Notice tone={isProd ? "amber" : "green"}>
-          Vas a desplegar <code className="font-mono">{shortImage(image.trim())}</code> a <strong>{scope.name}</strong>. Confirmá para continuar.
+      {scope.compute === "serverless" && (
+        <Notice tone="amber">
+          <strong>{t("appDetail.serverlessTitle")}</strong> {t("appDetail.serverlessBody")}
         </Notice>
       )}
-      {create.isError && <InlineError error={create.error} />}
+      {isProd && requireApprovalProd && <Notice tone="blue">{t("appDetail.prodApproval")}</Notice>}
+      {cluster && cluster.status === "offline" && <Notice tone="amber">{t("appDetail.agentOffline", { cluster: clusterTerm })}</Notice>}
+      {confirm && (
+        <Notice tone={isProd ? "amber" : "green"}>
+          <Trans i18nKey="appDetail.confirmDeploy" values={{ image: shortImage(image.trim()), scope: scope.name }} components={{ code: <code className="font-mono" />, strong: <strong /> }} />
+        </Notice>
+      )}
+      {create.isError && (isApiError(create.error) && create.error.status === 501 ? <Notice tone="amber">{t("appDetail.serverlessBody")} <span className="block text-xs">{create.error.message}</span></Notice> : <InlineError error={create.error} />)}
       <div className="flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
-          Cancelar
+          {t("common.cancel")}
         </Button>
         <Button type="submit" loading={create.isPending} icon={<Rocket className="size-4" />}>
-          {confirm ? "Confirmar deploy" : "Desplegar"}
+          {confirm ? t("appDetail.confirmDeployButton") : t("appDetail.deploy")}
         </Button>
       </div>
     </form>
@@ -574,6 +610,8 @@ function DeployForm({
 }
 
 function BindDialog({ org, app, scope, clusters, onClose }: { org: string; app: string; scope: Scope | null; clusters: Cluster[]; onClose: () => void }) {
+  const { t } = useTranslation();
+  const generic = useTerms(org).terms();
   const bind = useBindScope(org, app);
   const [clusterId, setClusterId] = useState("");
   const wantedEnv = scope?.name === "prod" ? "prod" : "nonprod";
@@ -587,12 +625,12 @@ function BindDialog({ org, app, scope, clusters, onClose }: { org: string; app: 
         bind.reset();
         onClose();
       }}
-      title={scope ? `Atar ${scope.name} a un cluster` : "Atar a un cluster"}
-      description={`Solo se listan clusters ${wantedEnv === "prod" ? "prod" : "no prod"}.`}
+      title={scope ? t("appDetail.bindTitle", { scope: scope.name, cluster: generic.cluster }) : t("appDetail.bind", { cluster: generic.cluster })}
+      description={t("appDetail.bindDescription", { env: wantedEnv === "prod" ? t("env.prod") : t("env.nonprod") })}
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </Button>
           <Button
             disabled={!clusterId}
@@ -602,7 +640,7 @@ function BindDialog({ org, app, scope, clusters, onClose }: { org: string; app: 
               bind.mutate({ scope: scope.name, clusterId }, { onSuccess: () => { setClusterId(""); onClose(); } });
             }}
           >
-            Atar
+            {t("appDetail.bindConfirm")}
           </Button>
         </>
       }
@@ -610,14 +648,14 @@ function BindDialog({ org, app, scope, clusters, onClose }: { org: string; app: 
       <div className="space-y-3">
         {options.length === 0 ? (
           <Notice tone="amber">
-            No hay clusters {wantedEnv === "prod" ? "prod" : "no prod"}.{" "}
+            {t("appDetail.noClustersOfEnv", { cluster: generic.cluster, env: wantedEnv === "prod" ? t("env.prod") : t("env.nonprod") })}{" "}
             <Link to={`/o/${org}/clusters`} className="font-medium underline">
-              Creá uno.
+              {t("appDetail.createOne")}
             </Link>
           </Notice>
         ) : (
-          <Field label="Cluster" required>
-            {(id) => <Select id={id} value={clusterId} onChange={(e) => setClusterId(e.target.value)} placeholder="Elegí un cluster" options={options} />}
+          <Field label={cap(generic.cluster)} required>
+            {(id) => <Select id={id} value={clusterId} onChange={(e) => setClusterId(e.target.value)} placeholder={t("appDetail.pickCluster", { cluster: generic.cluster })} options={options} />}
           </Field>
         )}
         {bind.isError && <InlineError error={bind.error} />}
@@ -627,14 +665,16 @@ function BindDialog({ org, app, scope, clusters, onClose }: { org: string; app: 
 }
 
 function ManifestDialog({ org, app, current, open, onClose }: { org: string; app: string; current: string; open: boolean; onClose: () => void }) {
+  const { t } = useTranslation();
   return (
-    <Dialog open={open} onClose={onClose} title="Manifest de la aplicación" description="Reemplazá el rampa.yaml. El nombre no puede cambiar." size="lg">
+    <Dialog open={open} onClose={onClose} title={t("appDetail.manifestTitle")} description={t("appDetail.manifestDescription")} size="lg">
       {open && <ManifestForm org={org} app={app} current={current} onClose={onClose} />}
     </Dialog>
   );
 }
 
 function ManifestForm({ org, app, current, onClose }: { org: string; app: string; current: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const update = useUpdateManifest(org, app);
   const [manifest, setManifest] = useState(current);
   const dirty = manifest !== current;
@@ -651,10 +691,10 @@ function ManifestForm({ org, app, current, onClose }: { org: string; app: string
       {update.isError && <InlineError error={update.error} />}
       <div className="flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
-          Cerrar
+          {t("common.close")}
         </Button>
         <Button type="submit" disabled={!dirty} loading={update.isPending}>
-          Guardar manifest
+          {t("appDetail.saveManifest")}
         </Button>
       </div>
     </form>
@@ -662,31 +702,194 @@ function ManifestForm({ org, app, current, onClose }: { org: string; app: string
 }
 
 function ScaffoldCard({ org, application, githubOrg }: { org: string; application: Application; githubOrg: string }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState<string | null>(null);
   const value = draft ?? githubOrg;
   const supported = application.type === "api" && application.runtime === "go";
   return (
     <Card className="mt-6">
-      <CardHeader title="Proyecto inicial" description="Código de partida del golden path, con el rampa.yaml real de esta app y los workflows de CI." />
+      <CardHeader title={t("appDetail.scaffold")} description={t("appDetail.scaffoldDescription")} />
       <CardBody className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
-          <Field label="Organización de GitHub" help="Donde vive tu copia de rampa. Si la dejás vacía se usa la de la organización, o CHANGEME.">
+          <Field label={t("settings.githubOrg")} help={t("appDetail.githubOrgHelp")}>
             {(id) => <Input id={id} className="w-64" value={value} placeholder="acme" onChange={(e) => setDraft(e.target.value)} />}
           </Field>
           <div className="pb-6">
             <DownloadLink href={scaffoldUrl(org, application.name, value)} icon={<Download className="size-4" />}>
-              Descargar proyecto inicial
+              {t("appDetail.downloadScaffold")}
             </DownloadLink>
           </div>
         </div>
         {!supported && (
-          <Notice tone="amber">Hoy el proyecto inicial existe solo para apps de tipo api con runtime go. Esta app es {application.type} en {application.runtime || "sin runtime"}, así que la descarga puede fallar.</Notice>
+          <Notice tone="amber">{t("appDetail.scaffoldUnsupported", { type: application.type, runtime: application.runtime || t("appDetail.noRuntime") })}</Notice>
         )}
-        <ol className="list-inside list-decimal space-y-1 text-sm text-slate-700">
-          <li>Descomprimí el zip.</li>
-          <li>Creá un repositorio en GitHub con el código descomprimido y subilo.</li>
-          <li>Hacé push a main: el workflow construye la imagen y despliega a dev.</li>
+        <ol className="list-inside list-decimal space-y-1 text-sm text-slate-700 dark:text-slate-200">
+          <li>{t("appDetail.scaffoldStep1")}</li>
+          <li>{t("appDetail.scaffoldStep2")}</li>
+          <li>{t("appDetail.scaffoldStep3")}</li>
         </ol>
+      </CardBody>
+    </Card>
+  );
+}
+
+function ComputeBadge({ compute }: { compute: Scope["compute"] }) {
+  const { t } = useTranslation();
+  const c = compute ?? "kubernetes";
+  return <Badge tone={c === "serverless" ? "violet" : "blue"}>{t(`appDetail.compute.${c}`)}</Badge>;
+}
+
+interface SecretRow {
+  key: string;
+  value: string;
+}
+
+/**
+ * Secretos de un scope. La API nunca devuelve valores: solo lista las claves
+ * conocidas. El formulario agrega o reemplaza valores con PUT .../secrets.
+ * Los valores viajan a la API y de ahí al agente; no se muestran ni se guardan acá.
+ */
+function ScopeSecretsCard({ org, app, scope, cluster, canWrite }: { org: string; app: string; scope: Scope; cluster: Cluster | undefined; canWrite: boolean }) {
+  const { t } = useTranslation();
+  const ct = useClusterTerms(org)(cluster);
+  const keysQ = useScopeSecretKeys(org, app, scope.name);
+  const put = usePutScopeSecrets(org, app, scope.name);
+  const [rows, setRows] = useState<SecretRow[]>([{ key: "", value: "" }]);
+  const [touched, setTouched] = useState(false);
+  const [sent, setSent] = useState<string[] | null>(null);
+
+  const setRow = (i: number, patch: Partial<SecretRow>) => {
+    setSent(null);
+    setRows((cur) => cur.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  };
+  const filled = rows.filter((r) => r.key !== "" || r.value !== "");
+  const rowErrors = rows.map((r, i) => {
+    if (r.key === "" && r.value === "") return null;
+    const keyErr = validateParamName(r.key);
+    if (keyErr) return keyErr;
+    if (r.value === "") return t("secrets.valueRequired");
+    if (rows.findIndex((o) => o.key === r.key) !== i) return t("secrets.duplicateKey");
+    return null;
+  });
+  const valid = filled.length > 0 && rowErrors.every((e) => e === null);
+  const known = keysQ.data ?? [];
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (!canWrite || !valid) return;
+    const values: Record<string, string> = {};
+    for (const r of filled) values[r.key] = r.value;
+    put.mutate(values, {
+      onSuccess: (res) => {
+        setSent(res?.keys ?? Object.keys(values));
+        setRows([{ key: "", value: "" }]);
+        setTouched(false);
+      },
+    });
+  };
+
+  const description =
+    cluster?.secret_store === "kubernetes"
+      ? t("secrets.descriptionKubernetes", { app })
+      : cluster
+        ? t("secrets.descriptionCloud", { store: ct.secretStore })
+        : t("secrets.descriptionGeneric");
+
+  return (
+    <Card>
+      <CardHeader
+        title={t("secrets.title", { scope: scope.name })}
+        description={description}
+        actions={scope.name === "prod" ? <Badge tone="blue">{t("secrets.adminsOnly")}</Badge> : undefined}
+      />
+      <CardBody className="space-y-4">
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-slate-600 dark:text-slate-300">{t("secrets.knownKeys")}</p>
+          {keysQ.isPending ? (
+            <LoadingState />
+          ) : keysQ.isError ? (
+            <InlineError error={keysQ.error} />
+          ) : known.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t("secrets.noKeys")}</p>
+          ) : (
+            <ul className="flex flex-wrap gap-1.5">
+              {known.map((k) => (
+                <li key={k}>
+                  <Badge tone="gray">
+                    <KeyRound className="size-3" aria-hidden />
+                    <span className="font-mono">{k}</span>
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{t("secrets.neverShown")}</p>
+        </div>
+
+        {!canWrite && <Notice tone="blue">{scope.name === "prod" ? t("secrets.prodNeedsAdmin") : t("common.needDeveloper")}</Notice>}
+
+        <form onSubmit={submit} className="space-y-3" autoComplete="off">
+          {rows.map((r, i) => (
+            <div key={i} className="grid gap-2 sm:grid-cols-5">
+              <div className="sm:col-span-2">
+                <Input
+                  aria-label={t("secrets.keyLabel")}
+                  list={`secret-keys-${scope.name}`}
+                  placeholder="API_KEY"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={!canWrite}
+                  aria-invalid={touched && rowErrors[i] !== null}
+                  className="font-mono text-xs"
+                  value={r.key}
+                  onChange={(e) => setRow(i, { key: e.target.value.toUpperCase() })}
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <Input
+                  type="password"
+                  aria-label={t("secrets.valueLabel")}
+                  placeholder={t("secrets.valuePlaceholder")}
+                  autoComplete="new-password"
+                  disabled={!canWrite}
+                  aria-invalid={touched && rowErrors[i] !== null}
+                  className="font-mono text-xs"
+                  value={r.value}
+                  onChange={(e) => setRow(i, { value: e.target.value })}
+                />
+              </div>
+              {touched && rowErrors[i] && <p className="text-xs text-red-600 dark:text-red-400 sm:col-span-5">{rowErrors[i]}</p>}
+            </div>
+          ))}
+          <datalist id={`secret-keys-${scope.name}`}>
+            {known.map((k) => (
+              <option key={k} value={k} />
+            ))}
+          </datalist>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Button variant="ghost" size="sm" disabled={!canWrite} icon={<Plus className="size-3.5" />} onClick={() => setRows((cur) => [...cur, { key: "", value: "" }])}>
+              {t("secrets.addAnother")}
+            </Button>
+            <Button type="submit" size="sm" disabled={!canWrite} loading={put.isPending} icon={<KeyRound className="size-3.5" />}>
+              {t("secrets.save")}
+            </Button>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{t("secrets.replaceHint")}</p>
+        </form>
+
+        {sent && (
+          <Notice tone="green">{t("secrets.sent", { count: sent.length, keys: sent.join(", ") })}</Notice>
+        )}
+        {put.isError &&
+          (isApiError(put.error) && put.error.isConflict ? (
+            <Notice tone="amber">
+              <p className="font-medium">{t("secrets.agentOfflineTitle", { cluster: ct.cluster })}</p>
+              <p className="mt-0.5">{t("secrets.agentOfflineBody")}</p>
+            </Notice>
+          ) : (
+            <InlineError error={put.error} />
+          ))}
       </CardBody>
     </Card>
   );

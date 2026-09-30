@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"rampa.dev/charts"
 	"rampa.dev/internal/api/auth"
 	"rampa.dev/internal/api/config"
 	"rampa.dev/internal/api/deploy"
@@ -28,6 +30,10 @@ import (
 // CloudFormationPath es la ruta pública de la plantilla de AWS.
 const CloudFormationPath = "/public/cloudformation/rampa-connect.yaml"
 
+// AgentChartPath es la ruta pública del chart rampa-agent empaquetado (.tgz),
+// para que un cloud-init lo instale con helm install rampa-agent <url>.
+const AgentChartPath = infra.AgentChartPath
+
 // Server es el plano de control listo para servir.
 type Server struct {
 	cfg     config.Config
@@ -37,7 +43,10 @@ type Server struct {
 	backend *hub.StoreBackend
 	bus     *events.Bus
 	infra   *infra.Service
+	api     *httpapi.API
 	handler http.Handler
+	// agentChart es el chart rampa-agent empaquetado, listo para servir.
+	agentChart []byte
 }
 
 // Parámetros del reaper de comandos: cada cuánto corre y cuánto margen da
@@ -45,6 +54,13 @@ type Server struct {
 const (
 	ReaperInterval = time.Minute
 	ReaperGrace    = 2 * time.Minute
+)
+
+// Purga de bootstrap tokens: cada cuánto corre y cuánto tiempo se conservan los
+// usados o vencidos (para poder explicar en el log por qué falló un canje).
+const (
+	BootstrapPurgeInterval = time.Hour
+	BootstrapPurgeKeep     = 24 * time.Hour
 )
 
 // New abre la base, corre migraciones y arma todos los componentes.
@@ -104,9 +120,20 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, version strin
 	if err := runner.Ready(); err != nil {
 		log.Warn(err.Error())
 	}
+	// El mismo cifrado del estado (RAMPA_STATE_KEY) protege las credenciales de
+	// las cuentas con auth token. Sin clave, esos providers responden 501.
+	if runner.Cipher() == nil {
+		log.Warn("sin RAMPA_STATE_KEY: los providers con auth token (DigitalOcean, OCI, OVH) responden 501 hasta que se configure")
+	}
+
+	agentChart, err := PackageChart(charts.RampaAgent, "rampa-agent")
+	if err != nil {
+		st.Close()
+		return nil, fmt.Errorf("empaquetando el chart rampa-agent: %w", err)
+	}
 
 	api := httpapi.New(httpapi.Deps{
-		Store: st, Auth: authn, Sessions: sessions, OIDC: oidc, Bus: bus, Hub: h, Pipeline: pipeline, Infra: runner,
+		Store: st, Auth: authn, Sessions: sessions, OIDC: oidc, Bus: bus, Hub: h, Pipeline: pipeline, Infra: runner, Cipher: runner.Cipher(),
 		Config: cfg, Log: log.With("component", "http"), Version: version,
 	})
 
@@ -121,6 +148,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, version strin
 		switch {
 		case path == CloudFormationPath:
 			serveCloudFormation(w, r)
+		case path == AgentChartPath:
+			serveAgentChart(w, r, agentChart)
 		case path == "/v1" || strings.HasPrefix(path, "/v1/") || path == "/healthz" || path == "/readyz" || path == "/version":
 			apiHandler.ServeHTTP(w, r)
 		case spa != nil:
@@ -130,7 +159,23 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, version strin
 		}
 	})
 
-	return &Server{cfg: cfg, log: log, store: st, hub: h, backend: backend, bus: bus, infra: runner, handler: root}, nil
+	return &Server{cfg: cfg, log: log, store: st, hub: h, backend: backend, bus: bus, infra: runner, api: api, handler: root, agentChart: agentChart}, nil
+}
+
+// serveAgentChart entrega el chart rampa-agent como tar.gz, cacheable 5 minutos.
+func serveAgentChart(w http.ResponseWriter, r *http.Request, tgz []byte) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "invalid", "método no permitido")
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="rampa-agent.tgz"`)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Content-Length", strconv.Itoa(len(tgz)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(tgz)
+	}
 }
 
 // serveCloudFormation entrega la plantilla embebida en pkg/provider/aws.
@@ -206,6 +251,9 @@ func (s *Server) Hub() *hub.Hub { return s.hub }
 // Backend expone el backend del hub (para tests del reaper).
 func (s *Server) Backend() *hub.StoreBackend { return s.backend }
 
+// API expone la API HTTP (para tests que inyectan fallos).
+func (s *Server) API() *httpapi.API { return s.api }
+
 // Infra expone el runner de infraestructura (para tests).
 func (s *Server) Infra() *infra.Service { return s.infra }
 
@@ -221,6 +269,8 @@ func (s *Server) Run(ctx context.Context) error {
 	// Reaper: cierra como failed los comandos sent o acked cuyo result nunca
 	// llegó, para que ningún deployment quede en applying para siempre.
 	go s.backend.RunReaper(ctx, ReaperInterval, s.cfg.DeployTimeout, ReaperGrace)
+	// Purga horaria de bootstrap tokens usados o vencidos hace más de un día.
+	go s.runBootstrapPurger(ctx, BootstrapPurgeInterval, BootstrapPurgeKeep)
 	// Runner de infraestructura: recupera runs huérfanos y procesa la cola.
 	go s.infra.Run(ctx)
 
@@ -248,6 +298,33 @@ func (s *Server) Run(ctx context.Context) error {
 		s.log.Warn("shutdown HTTP con error", "err", err)
 	}
 	return nil
+}
+
+// purgeBootstrapTokens borra los bootstrap tokens usados o vencidos hace más de keep.
+func (s *Server) purgeBootstrapTokens(ctx context.Context, keep time.Duration) {
+	n, err := s.store.PurgeBootstrapTokens(ctx, keep)
+	if err != nil {
+		s.log.Error("purga de bootstrap tokens", "err", err)
+		return
+	}
+	if n > 0 {
+		s.log.Info("purga de bootstrap tokens", "deleted", n)
+	}
+}
+
+// runBootstrapPurger purga al arrancar y después cada interval hasta que ctx termina.
+func (s *Server) runBootstrapPurger(ctx context.Context, interval, keep time.Duration) {
+	s.purgeBootstrapTokens(ctx, keep)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.purgeBootstrapTokens(ctx, keep)
+		}
+	}
 }
 
 // Close libera la base.

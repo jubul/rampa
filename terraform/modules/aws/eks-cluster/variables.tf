@@ -47,6 +47,19 @@ variable "api_url" {
   default     = ""
 }
 
+variable "bootstrap_token" {
+  description = "Bootstrap token de un solo uso generado por Rampa. Tiene prioridad sobre agent_token."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "agent_chart_url" {
+  description = "URL del chart rampa-agent empaquetado (la API lo sirve en /public/charts/rampa-agent.tgz). Se usa si no hay agent_chart_oci ni agent_chart_path."
+  type        = string
+  default     = ""
+}
+
 variable "agent_token" {
   description = "Token del cluster generado por Rampa. Solo se usa para crear el Secret del agente."
   type        = string
@@ -87,4 +100,10 @@ variable "tags" {
   description = "Tags adicionales para todos los recursos."
   type        = map(string)
   default     = {}
+}
+
+variable "public_access_cidrs" {
+  description = "CIDRs que pueden llegar al endpoint publico de la API de Kubernetes. Acotalo a tus redes; el agente y el runner de Rampa lo necesitan (el runner desde la IP de la API de Rampa)."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"rampa.dev/internal/api/auth"
+	"rampa.dev/internal/api/infra"
 	"rampa.dev/internal/api/store"
 )
 
@@ -49,6 +50,17 @@ func conflict(msg string) *apiError {
 
 func forbidden(msg string) *apiError {
 	return &apiError{status: http.StatusForbidden, code: "forbidden", message: msg}
+}
+
+// notImplemented es 501: la instalación no tiene algo configurado o la
+// funcionalidad llega en otra ola. El mensaje dice qué falta.
+func notImplemented(msg string) *apiError {
+	return &apiError{status: http.StatusNotImplemented, code: "not_implemented", message: msg}
+}
+
+// tooManyRequests es 429 con el código rate_limited.
+func tooManyRequests(msg string) *apiError {
+	return &apiError{status: http.StatusTooManyRequests, code: "rate_limited", message: msg}
 }
 
 // writeJSON escribe una respuesta JSON.
@@ -100,11 +112,14 @@ func decode(r *http.Request, v any) error {
 func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, what string) {
 	var ae *apiError
 	var fe *auth.ForbiddenError
+	var ie *infra.InputError
 	switch {
 	case errors.As(err, &ae):
 		writeError(w, ae.status, ae.code, ae.message, ae.details...)
 	case errors.As(err, &fe):
 		writeError(w, http.StatusForbidden, "forbidden", fe.Error())
+	case errors.As(err, &ie):
+		writeError(w, http.StatusBadRequest, "invalid", ie.Error())
 	case errors.Is(err, auth.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
 	case errors.Is(err, store.ErrNotFound):

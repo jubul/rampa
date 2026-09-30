@@ -18,20 +18,40 @@
     },
     "cluster": {
       "type": "object",
-      "description": "Hace falta cluster.token o cluster.existingSecret",
+      "description": "Hace falta exactamente uno de cluster.token, cluster.existingSecret o cluster.bootstrapToken",
       "properties": {
         "token": { "type": "string" },
         "existingSecret": { "type": "string" },
+        "bootstrapToken": { "type": "string" },
         "secretKey": { "type": "string", "minLength": 1 }
       },
-      "anyOf": [
+      "oneOf": [
         {
+          "description": "cluster.token: el token del cluster que entrega la web",
           "required": ["token"],
-          "properties": { "token": { "type": "string", "minLength": 1 } }
+          "properties": {
+            "token": { "type": "string", "minLength": 1 },
+            "existingSecret": { "type": "string", "maxLength": 0 },
+            "bootstrapToken": { "type": "string", "maxLength": 0 }
+          }
         },
         {
+          "description": "cluster.existingSecret: un Secret propio con la clave token",
           "required": ["existingSecret"],
-          "properties": { "existingSecret": { "type": "string", "minLength": 1 } }
+          "properties": {
+            "existingSecret": { "type": "string", "minLength": 1 },
+            "token": { "type": "string", "maxLength": 0 },
+            "bootstrapToken": { "type": "string", "maxLength": 0 }
+          }
+        },
+        {
+          "description": "cluster.bootstrapToken: token de bootstrap de un solo uso que el agente canjea al arrancar",
+          "required": ["bootstrapToken"],
+          "properties": {
+            "bootstrapToken": { "type": "string", "minLength": 1 },
+            "token": { "type": "string", "maxLength": 0 },
+            "existingSecret": { "type": "string", "maxLength": 0 }
+          }
         }
       ]
     },
@@ -70,8 +90,12 @@
     "rbac": {
       "type": "object",
       "required": ["create"],
-      "properties": { "create": { "type": "boolean" } }
+      "properties": {
+        "create": { "type": "boolean" },
+        "appSecrets": { "type": "boolean" }
+      }
     },
+    "hostNetwork": { "type": "boolean" },
     "resources": { "type": "object" },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },

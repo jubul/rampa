@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -84,25 +83,30 @@ func (a *API) listInfraModules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-var (
-	clusterNameRe  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	iamPrincipalRe = regexp.MustCompile(`^arn:aws[a-zA-Z-]*:iam::\d{12}:(user|role)/.+$`)
-)
+var clusterNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 
+// createInfraCluster crea un cluster (Kubernetes administrado o máquina con
+// k3s) con OpenTofu. module elige el módulo (default: el kind cluster del
+// provider de la cuenta) e inputs son sus inputs, validados contra lo que el
+// módulo declara. Los campos kubernetes_version, vpc_cidr y admin_principal_arns
+// al nivel raíz siguen aceptándose por compatibilidad con el formulario de EKS.
 func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 	if !a.requireInfra(w) {
 		return
 	}
 	oc := orgCtx(r)
 	var body struct {
-		CloudAccountID     string   `json:"cloud_account_id"`
-		Name               string   `json:"name"`
-		Env                string   `json:"env"`
+		CloudAccountID string         `json:"cloud_account_id"`
+		Name           string         `json:"name"`
+		Env            string         `json:"env"`
+		Domain         string         `json:"domain"`
+		IngressClass   string         `json:"ingress_class"`
+		SecretStore    string         `json:"secret_store"`
+		Module         string         `json:"module"`
+		Inputs         map[string]any `json:"inputs"`
+
 		KubernetesVersion  string   `json:"kubernetes_version"`
 		VPCCIDR            string   `json:"vpc_cidr"`
-		Domain             string   `json:"domain"`
-		IngressClass       string   `json:"ingress_class"`
-		SecretStore        string   `json:"secret_store"`
 		AdminPrincipalARNs []string `json:"admin_principal_arns"`
 	}
 	if err := decode(r, &body); err != nil {
@@ -130,44 +134,25 @@ func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 	if body.IngressClass == "" {
 		body.IngressClass = "nginx"
 	}
-	body.KubernetesVersion = strings.TrimSpace(body.KubernetesVersion)
-	if body.KubernetesVersion == "" {
-		body.KubernetesVersion = infra.DefaultKubernetesVersion
+	// Lo explícito en inputs gana; los campos viejos solo completan lo que falta.
+	inputs := map[string]any{}
+	for k, v := range body.Inputs {
+		inputs[k] = v
 	}
-	validVersion := false
-	for _, v := range infra.KubernetesVersions {
-		if v == body.KubernetesVersion {
-			validVersion = true
+	if v := strings.TrimSpace(body.KubernetesVersion); v != "" {
+		if _, ok := inputs["kubernetes_version"]; !ok {
+			inputs["kubernetes_version"] = v
 		}
 	}
-	if !validVersion {
-		a.fail(w, r, invalid("kubernetes_version inválida. Opciones: "+strings.Join(infra.KubernetesVersions, ", ")), "")
-		return
+	if v := strings.TrimSpace(body.VPCCIDR); v != "" {
+		if _, ok := inputs["vpc_cidr"]; !ok {
+			inputs["vpc_cidr"] = v
+		}
 	}
-	body.VPCCIDR = strings.TrimSpace(body.VPCCIDR)
-	if body.VPCCIDR != "" {
-		ip, ipnet, err := net.ParseCIDR(body.VPCCIDR)
-		if err != nil || ip.To4() == nil {
-			a.fail(w, r, invalid("vpc_cidr debe ser un rango IPv4 como 10.42.0.0/16"), "")
-			return
+	if body.AdminPrincipalARNs != nil {
+		if _, ok := inputs["admin_principal_arns"]; !ok {
+			inputs["admin_principal_arns"] = body.AdminPrincipalARNs
 		}
-		if ones, _ := ipnet.Mask.Size(); ones < 16 || ones > 24 {
-			a.fail(w, r, invalid("vpc_cidr debe tener un prefijo entre /16 y /24"), "")
-			return
-		}
-		body.VPCCIDR = ipnet.String()
-	}
-	arns := make([]string, 0, len(body.AdminPrincipalARNs))
-	for _, arn := range body.AdminPrincipalARNs {
-		arn = strings.TrimSpace(arn)
-		if arn == "" {
-			continue
-		}
-		if !iamPrincipalRe.MatchString(arn) {
-			a.fail(w, r, invalid(fmt.Sprintf("admin_principal_arns: %q no es el ARN de un usuario o rol IAM", arn)), "")
-			return
-		}
-		arns = append(arns, arn)
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -185,18 +170,26 @@ func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, invalid("la cuenta no tiene región; hacé PATCH con region antes de crear un cluster"), "")
 		return
 	}
-	if m, ok := infra.FindModule(acc.Provider, store.InfraKindCluster); !ok || !m.Available {
-		a.fail(w, r, invalid(fmt.Sprintf("todavía no hay módulo de cluster para el provider %s", acc.Provider)), "")
+	m, err := infra.ResolveModule(acc.Provider, strings.TrimSpace(body.Module))
+	if err != nil {
+		a.fail(w, r, err, "")
 		return
+	}
+	typed, err := infra.ValidateInputs(m, inputs)
+	if err != nil {
+		a.fail(w, r, err, "")
+		return
+	}
+	if body.SecretStore == "" {
+		body.SecretStore = m.SecretStore
 	}
 	if body.SecretStore == "" {
 		body.SecretStore = defaultSecretStore(acc.Provider)
 	}
 	p := principal(r)
 	run, _, err := a.Infra.CreateClusterRun(ctx, infra.ClusterRequest{
-		OrgID: oc.Org.ID, RequestedBy: p.User.ID, Account: acc, Name: body.Name, Env: body.Env, Domain: body.Domain,
-		IngressClass: body.IngressClass, SecretStore: body.SecretStore, KubernetesVersion: body.KubernetesVersion,
-		VPCCIDR: body.VPCCIDR, AdminPrincipalARNs: arns, Actor: p.Actor(),
+		OrgID: oc.Org.ID, RequestedBy: p.User.ID, Account: acc, Module: m.Module, Name: body.Name, Env: body.Env, Domain: body.Domain,
+		IngressClass: body.IngressClass, SecretStore: body.SecretStore, Inputs: typed, Actor: p.Actor(),
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {

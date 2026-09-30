@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -8,10 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"rampa.dev/internal/api/crypto"
 	"rampa.dev/internal/api/events"
 	"rampa.dev/internal/api/store"
 	"rampa.dev/internal/api/store/storetest"
 )
+
+// testKey es una clave AES-256 de prueba.
+func testKey(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
 
 func TestMain(m *testing.M) {
 	code := m.Run()
@@ -65,6 +70,36 @@ func (f *fixture) connectedAccount(name string) *store.CloudAccount {
 	}
 	acc, err = f.st.UpdateCloudAccountRef(ctx, f.orgID, acc.ID, "arn:aws:iam::123456789012:role/RampaConnect", acc.Settings)
 	if err != nil {
+		f.t.Fatal(err)
+	}
+	acc, err = f.st.SetCloudAccountVerification(ctx, f.orgID, acc.ID, store.CloudAccountConnected, store.Verification{OK: true})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return acc
+}
+
+// tokenAccount crea una cuenta de un provider con auth token (digitalocean)
+// con sus credenciales cifradas con key, ya connected.
+func (f *fixture) tokenAccount(name, providerKind string, key []byte, creds, settings map[string]string) *store.CloudAccount {
+	f.t.Helper()
+	ctx := context.Background()
+	if settings == nil {
+		settings = map[string]string{}
+	}
+	acc, err := f.st.CreateCloudAccount(ctx, &store.CloudAccount{OrgID: f.orgID, Provider: providerKind, Name: name, Region: "nyc3", Settings: settings})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	c, err := crypto.NewCipher(key)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	ct, err := c.SealCredentials(acc.ID, creds)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err := f.st.SetCloudAccountCredentials(ctx, f.orgID, acc.ID, ct); err != nil {
 		f.t.Fatal(err)
 	}
 	acc, err = f.st.SetCloudAccountVerification(ctx, f.orgID, acc.ID, store.CloudAccountConnected, store.Verification{OK: true})

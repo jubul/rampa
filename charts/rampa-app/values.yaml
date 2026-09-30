@@ -45,7 +45,7 @@ secrets: []           # [{name, remoteKey, property?}] parameters desde Secrets 
 cluster:
   domain: apps.example.internal
   ingressClass: nginx
-  secretStore: aws-secrets-manager   # nombre del ClusterSecretStore de External Secrets
+  secretStore: aws-secrets-manager   # nombre del ClusterSecretStore de External Secrets, o "kubernetes": sin ExternalSecret, el agente mantiene el Secret <app>-params
   tlsIssuer: letsencrypt             # ClusterIssuer de cert-manager. Vacío para no anotar
 
 aws:

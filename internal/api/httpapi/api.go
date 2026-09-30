@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +14,7 @@ import (
 
 	"rampa.dev/internal/api/auth"
 	"rampa.dev/internal/api/config"
+	"rampa.dev/internal/api/crypto"
 	"rampa.dev/internal/api/deploy"
 	"rampa.dev/internal/api/events"
 	"rampa.dev/internal/api/hub"
@@ -31,7 +33,11 @@ type Deps struct {
 	Hub      *hub.Hub
 	Pipeline *deploy.Pipeline
 	// Infra es el runner de OpenTofu. nil deshabilita los endpoints /infra (501).
-	Infra   *infra.Service
+	Infra *infra.Service
+	// Cipher es el cifrado del servidor (RAMPA_STATE_KEY) con el que se guardan
+	// las credenciales de las cuentas con auth token. nil: esos providers
+	// responden 501.
+	Cipher  *crypto.Cipher
 	Config  config.Config
 	Log     *slog.Logger
 	Version string
@@ -40,7 +46,40 @@ type Deps struct {
 // API es el conjunto de handlers.
 type API struct {
 	Deps
+	// bootstrapLimiter acota los canjes de POST /v1/agent/bootstrap por IP y por token.
+	bootstrapLimiter *rateLimiter
+	// sender reemplaza a Hub.Send cuando no es nil (para tests que simulan una
+	// entrega fallida).
+	sender atomic.Pointer[commandSender]
 }
+
+// commandSender manda un comando en vivo al agente de un cluster.
+type commandSender func(clusterID string, cmd protocol.Command) error
+
+// SetCommandSender reemplaza la entrega en vivo de comandos (Hub.Send). Solo
+// para tests; nil restaura el Hub.
+func (a *API) SetCommandSender(f func(clusterID string, cmd protocol.Command) error) {
+	if f == nil {
+		a.sender.Store(nil)
+		return
+	}
+	cs := commandSender(f)
+	a.sender.Store(&cs)
+}
+
+// sendCommand entrega cmd por la conexión viva del cluster.
+func (a *API) sendCommand(clusterID string, cmd protocol.Command) error {
+	if cs := a.sender.Load(); cs != nil {
+		return (*cs)(clusterID, cmd)
+	}
+	return a.Hub.Send(clusterID, cmd)
+}
+
+// Límite de canjes de bootstrap: 10 intentos por minuto por IP y por token.
+const (
+	BootstrapRateLimit  = 10
+	BootstrapRateWindow = time.Minute
+)
 
 // New arma la API.
 func New(d Deps) *API {
@@ -50,15 +89,17 @@ func New(d Deps) *API {
 	if d.Version == "" {
 		d.Version = "dev"
 	}
-	return &API{Deps: d}
+	return &API{Deps: d, bootstrapLimiter: newRateLimiter(BootstrapRateLimit, BootstrapRateWindow)}
 }
 
 // Handler devuelve el router con /v1, /healthz, /readyz y /version.
 func (a *API) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	r.Use(trustedProxies(a.Config.TrustedProxies))
 	r.Use(requestLogger(a.Log))
 	r.Use(recoverer(a.Log))
+	// Idioma: Accept-Language para todos; RequireAuth lo pisa con la preferencia del usuario.
+	r.Use(auth.LocaleFromHeader)
 	if a.Config.DevLogin {
 		r.Use(devCORS)
 	}
@@ -90,6 +131,8 @@ func (a *API) routesV1(r chi.Router) {
 	if a.Hub != nil {
 		r.Get("/agent/connect", a.Hub.ServeHTTP)
 	}
+	// Canje de un bootstrap token por el token del cluster: sin sesión, con límite por IP y token.
+	r.Post("/agent/bootstrap", a.agentBootstrap)
 	if a.Infra != nil {
 		// Backend http de estado de OpenTofu: autentica con el token del run, no con sesión.
 		r.Mount("/tfstate", a.Infra.StateHandler())
@@ -98,6 +141,7 @@ func (a *API) routesV1(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(a.Auth.RequireAuth)
 		r.Get("/me", a.me)
+		r.Patch("/me", a.updateMe)
 		r.Get("/orgs", a.listOrgs)
 		r.Post("/orgs", a.createOrg)
 
@@ -133,6 +177,8 @@ func (a *API) routesV1(r chi.Router) {
 			r.Get("/clusters/{id}", a.getCluster)
 			r.With(admin).Delete("/clusters/{id}", a.deleteCluster)
 			r.With(admin).Post("/clusters/{id}/rotate-token", a.rotateClusterToken)
+			r.With(admin).Post("/clusters/{id}/bootstrap-token", a.createBootstrapToken)
+			r.With(admin).Get("/clusters/{id}/install-command", a.clusterInstallCommand)
 
 			r.Get("/onboarding", a.onboarding)
 
@@ -158,6 +204,8 @@ func (a *API) routesV1(r chi.Router) {
 			r.Get("/apps/{app}/scopes", a.listScopes)
 			r.With(developer).Put("/apps/{app}/scopes/{scope}", a.bindScope)
 			r.With(developer).Delete("/apps/{app}/scopes/{scope}", a.deleteScope)
+			r.With(developer).Put("/apps/{app}/scopes/{scope}/secrets", a.putScopeSecrets)
+			r.Get("/apps/{app}/scopes/{scope}/secrets", a.getScopeSecrets)
 
 			r.With(developer).Post("/apps/{app}/scopes/{scope}/deployments", a.createDeployment)
 			r.Get("/apps/{app}/scopes/{scope}/deployments", a.listDeployments)

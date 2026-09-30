@@ -10,15 +10,15 @@ export function Table({ className, children }: { className?: string; children: R
 }
 
 export function THead({ children }: { children: ReactNode }) {
-  return <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">{children}</thead>;
+  return <thead className="bg-slate-50 dark:bg-slate-800/60 text-left text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{children}</thead>;
 }
 
 export function TBody({ children }: { children: ReactNode }) {
-  return <tbody className="divide-y divide-slate-100">{children}</tbody>;
+  return <tbody className="divide-y divide-slate-100 dark:divide-slate-800">{children}</tbody>;
 }
 
 export function TR({ className, ...rest }: HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={cn("hover:bg-slate-50/60", className)} {...rest} />;
+  return <tr className={cn("hover:bg-slate-50/60 dark:hover:bg-slate-800/40", className)} {...rest} />;
 }
 
 export function TH({ className, ...rest }: ThHTMLAttributes<HTMLTableCellElement>) {
@@ -26,5 +26,5 @@ export function TH({ className, ...rest }: ThHTMLAttributes<HTMLTableCellElement
 }
 
 export function TD({ className, ...rest }: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn("px-4 py-3 align-middle text-slate-700", className)} {...rest} />;
+  return <td className={cn("px-4 py-3 align-middle text-slate-700 dark:text-slate-200", className)} {...rest} />;
 }

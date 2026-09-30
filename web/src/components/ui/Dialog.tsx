@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Button } from "./Button";
+import { useTranslation } from "react-i18next";
 
 interface DialogProps {
   open: boolean;
@@ -16,6 +17,7 @@ interface DialogProps {
 
 /** Diálogo modal sobre el elemento <dialog> nativo. */
 export function Dialog({ open, onClose, title, description, children, footer, persistent = false, size = "md" }: DialogProps) {
+  const { t } = useTranslation();
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -39,24 +41,24 @@ export function Dialog({ open, onClose, title, description, children, footer, pe
   return (
     <dialog
       ref={ref}
-      className={`m-auto w-full ${size === "lg" ? "max-w-3xl" : "max-w-lg"} rounded-lg border border-slate-200 bg-white p-0 text-slate-900 shadow-xl backdrop:bg-slate-900/40`}
+      className={`m-auto w-full ${size === "lg" ? "max-w-3xl" : "max-w-lg"} rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-0 text-slate-900 dark:text-slate-100 shadow-xl backdrop:bg-slate-900/40`}
       onClick={(e) => {
         if (!persistent && e.target === e.currentTarget) onClose();
       }}
     >
       {open && (
         <div className="flex max-h-[85vh] flex-col">
-          <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 px-5 py-4">
             <div>
               <h2 className="text-base font-semibold">{title}</h2>
-              {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
+              {description && <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>}
             </div>
             {!persistent && (
-              <Button variant="ghost" size="sm" onClick={onClose} aria-label="Cerrar" icon={<X className="size-4" />} />
+              <Button variant="ghost" size="sm" onClick={onClose} aria-label={t("common.close")} icon={<X className="size-4" />} />
             )}
           </div>
           <div className="overflow-y-auto px-5 py-4">{children}</div>
-          {footer && <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">{footer}</div>}
+          {footer && <div className="flex justify-end gap-2 border-t border-slate-200 dark:border-slate-800 px-5 py-3">{footer}</div>}
         </div>
       )}
     </dialog>
@@ -70,7 +72,7 @@ export function ConfirmDialog({
   onConfirm,
   title,
   description,
-  confirmLabel = "Confirmar",
+  confirmLabel,
   danger = false,
   loading = false,
   error,
@@ -87,6 +89,7 @@ export function ConfirmDialog({
   error?: string | null;
   children?: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <Dialog
       open={open}
@@ -96,16 +99,16 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={loading}>
-            Cancelar
+            {t("common.cancel")}
           </Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading}>
-            {confirmLabel}
+            {confirmLabel ?? t("common.confirm")}
           </Button>
         </>
       }
     >
       {children}
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
     </Dialog>
   );
 }

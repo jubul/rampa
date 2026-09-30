@@ -79,6 +79,25 @@ func validateDeploy(cmd *protocol.DeployCommand) error {
 		return errors.New("el comando deploy no trae objetos")
 	case isProtectedNamespace(cmd.Namespace):
 		return fmt.Errorf("me niego a desplegar en el namespace del sistema %q", cmd.Namespace)
+	case cmd.Scope == "" || cmd.Namespace != cmd.App+"-"+cmd.Scope:
+		return fmt.Errorf("el namespace %q no coincide con <app>-<scope> (%q-%q); no despliego ahí", cmd.Namespace, cmd.App, cmd.Scope)
+	}
+	return nil
+}
+
+// checkNamespaceOwner decide si el agente puede usar un namespace existente
+// para la app. Con label rampa.dev/app tiene que coincidir (nunca se pisa la de
+// otra app). Sin esa label solo se adopta si lo creó Rampa (managed-by=rampa):
+// un namespace ajeno no se toca.
+func checkNamespaceOwner(name, app string, nsLabels map[string]string) error {
+	if owner := nsLabels[LabelApp]; owner != "" {
+		if owner != app {
+			return fmt.Errorf("el namespace %q pertenece a la app %q (label %s); no lo uso para %q", name, owner, LabelApp, app)
+		}
+		return nil
+	}
+	if nsLabels[LabelManagedBy] != ManagedByValue {
+		return fmt.Errorf("el namespace %q ya existe y no lo creó Rampa (no tiene la label %s ni %s=%s); no lo adopto", name, LabelApp, LabelManagedBy, ManagedByValue)
 	}
 	return nil
 }
@@ -103,12 +122,17 @@ func (c *Client) ensureNamespace(ctx context.Context, name string, lbls map[stri
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("no pude consultar el namespace: %w", err)
 		}
+		created := make(map[string]string, len(lbls)+1)
+		for k, v := range lbls {
+			created[k] = v
+		}
+		created[LabelManagedBy] = ManagedByValue
 		ns := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Namespace",
 			"metadata": map[string]any{
 				"name":   name,
-				"labels": toAnyMap(lbls),
+				"labels": toAnyMap(created),
 			},
 		}}
 		if _, err := nsClient.Create(ctx, ns, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
@@ -121,6 +145,9 @@ func (c *Client) ensureNamespace(ctx context.Context, name string, lbls map[stri
 	}
 	if existing.GetDeletionTimestamp() != nil {
 		return errors.New("el namespace se está borrando; reintentá cuando termine")
+	}
+	if err := checkNamespaceOwner(name, lbls[LabelApp], existing.GetLabels()); err != nil {
+		return err
 	}
 	current := existing.GetLabels()
 	changed := false

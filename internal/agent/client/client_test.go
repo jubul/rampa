@@ -250,7 +250,7 @@ func TestHelloWelcomeAndDeployFlow(t *testing.T) {
 		if hello.Protocol != protocol.Version || hello.AgentVersion != "test" || hello.KubernetesVersion != "v1.31.2" {
 			t.Errorf("hello: %+v", hello)
 		}
-		if strings.Join(hello.Capabilities, ",") != "deploy,undeploy,status,logs" {
+		if strings.Join(hello.Capabilities, ",") != "deploy,undeploy,status,logs,write_secret" {
 			t.Errorf("capabilities: %v", hello.Capabilities)
 		}
 	case <-time.After(5 * time.Second):
@@ -847,7 +847,7 @@ func TestNewValidatesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.cfg.MinBackoff != time.Second || c.cfg.MaxBackoff != 60*time.Second || len(c.cfg.Capabilities) != 4 {
+	if c.cfg.MinBackoff != time.Second || c.cfg.MaxBackoff != 60*time.Second || len(c.cfg.Capabilities) != 5 {
 		t.Errorf("defaults: %+v", c.cfg)
 	}
 }

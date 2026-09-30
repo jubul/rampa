@@ -13,6 +13,7 @@ Una unidad deployable. Es 1:1 con un repositorio (o una carpeta de un monorepo).
 Una instancia corriendo de una application en un entorno. Cada scope es un namespace de Kubernetes propio, llamado `<app>-<scope>`, con su cuota, su red y sus secretos. Hay dos clases:
 
 - **Permanentes:** `dev`, `staging`, `prod`. Se declaran en `rampa.yaml`.
+- Cada scope tiene un `compute`: `kubernetes` (default) corre en un cluster, administrado o una máquina de un nodo con k3s; `serverless` corre la misma imagen como función (AWS Lambda con el Lambda Web Adapter). El código de la app no cambia entre uno y otro.
 - **Efímeros:** `pr-<número>`. Se crean al abrir un pull request y se destruyen al cerrarlo. Heredan su configuración de la sección `pr` del `rampa.yaml`.
 
 `prod` corre en el cluster y la cuenta AWS de producción. El resto, en no-prod.
@@ -63,6 +64,7 @@ spec:
       size: S
       replicas: 2
     prod:
+      compute: kubernetes            # kubernetes (default) | serverless
       size: M
       replicas: 3
       strategy: canary

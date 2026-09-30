@@ -19,10 +19,10 @@ const docsSpecJSON = `{
   "healthcheck": "/health",
   "schedule": "",
   "scopes": [
-    {"name": "dev", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": null, "ttl": ""},
-    {"name": "prod", "size": "M", "replicas": 3, "strategy": "canary", "domain": "checkout.acme.com",
+    {"name": "dev", "compute": "kubernetes", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": null, "ttl": ""},
+    {"name": "prod", "compute": "kubernetes", "size": "M", "replicas": 3, "strategy": "canary", "domain": "checkout.acme.com",
      "autoscaling": {"min": 3, "max": 10, "cpu": 70}, "ttl": ""},
-    {"name": "pr", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": null, "ttl": "72h"}
+    {"name": "pr", "compute": "kubernetes", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": null, "ttl": "72h"}
   ],
   "parameters": [
     {"name": "LOG_LEVEL", "source": "value", "value": "info", "scopes": []},
@@ -68,7 +68,7 @@ func TestSpecRoundTrip(t *testing.T) {
 		t.Errorf("orden de scopes inesperado (dev=%d prod=%d pr=%d):\n%s", iDev, iProd, iPR, text)
 	}
 	// Indentación de 2 espacios, como el resto de los rampa.yaml del repo.
-	if !strings.Contains(text, "\n    dev:\n      size: S\n") {
+	if !strings.Contains(text, "\n    dev:\n      compute: kubernetes\n      size: S\n") {
 		t.Errorf("indentación inesperada:\n%s", text)
 	}
 	parsed, err := Parse(raw)
@@ -157,7 +157,7 @@ func TestFromSpecDefaults(t *testing.T) {
 		t.Errorf("defaults de metadata/spec: %+v %+v", app.Metadata, app.Spec)
 	}
 	dev := app.Spec.Scopes["dev"]
-	if dev.Size != "S" || dev.Replicas != 1 || dev.Strategy != "rolling" {
+	if dev.Size != "S" || dev.Replicas != 1 || dev.Strategy != "rolling" || dev.Compute != ComputeKubernetes {
 		t.Errorf("defaults de scope: %+v", dev)
 	}
 	if app.Spec.Scopes["pr"].TTL != "72h" {

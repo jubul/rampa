@@ -38,6 +38,17 @@ type fakeProvider struct{}
 func (fakeProvider) Kind() provider.Kind { return provider.AWS }
 func (fakeProvider) DisplayName() string { return "AWS (falso para tests)" }
 func (fakeProvider) Available() bool     { return true }
+func (fakeProvider) Auth() provider.AuthKind {
+	return provider.AuthFederated
+}
+func (fakeProvider) Terminology() provider.Terminology {
+	return provider.Terminology{
+		Account: provider.LocalizedTerm{ES: "cuenta de AWS", EN: "AWS account"}, Project: provider.LocalizedTerm{ES: "cuenta", EN: "account"},
+		Cluster: provider.LocalizedTerm{ES: "cluster EKS", EN: "EKS cluster"}, VM: provider.LocalizedTerm{ES: "instancia EC2", EN: "EC2 instance"},
+		Registry: provider.LocalizedTerm{ES: "ECR", EN: "ECR"}, SecretStore: provider.LocalizedTerm{ES: "Secrets Manager", EN: "Secrets Manager"},
+		Region: provider.LocalizedTerm{ES: "región", EN: "region"},
+	}
+}
 func (fakeProvider) ConnectInstructions(req provider.ConnectRequest) provider.Instructions {
 	return provider.Instructions{
 		Title:       "Conectar cuenta falsa",
@@ -327,10 +338,23 @@ func TestFullFlow(t *testing.T) {
 		t.Errorf("orgs: %v", orgs)
 	}
 
-	// Providers.
+	// Providers: los seis conocidos, con auth y terminología cuando están registrados.
 	provs := c.must(http.MethodGet, "/v1/orgs/acme/providers", nil, http.StatusOK)
-	if len(itemsOf(provs)) != 3 {
+	if len(itemsOf(provs)) != 6 {
 		t.Errorf("providers: %v", provs)
+	}
+	for _, p := range itemsOf(provs) {
+		switch str(p, "kind") {
+		case "aws":
+			term, _ := p["terminology"].(map[string]any)
+			if p["available"] != true || p["auth"] != "federated" || term == nil || term["vm"].(map[string]any)["es"] != "instancia EC2" {
+				t.Errorf("provider aws: %v", p)
+			}
+		case "digitalocean", "oci", "ovh":
+			if p["auth"] != "token" {
+				t.Errorf("provider %s debería ser auth token: %v", str(p, "kind"), p)
+			}
+		}
 	}
 
 	// Cuenta de nube.

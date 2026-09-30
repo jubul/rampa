@@ -57,12 +57,15 @@ const (
 	ShutdownMessage = "el agente se apagó durante el comando"
 )
 
-// DefaultCapabilities son los comandos que el agente sabe ejecutar.
+// DefaultCapabilities son los comandos que el agente sabe ejecutar. Van en el
+// hello para que la API sepa qué puede mandar (write_secret requiere un agente
+// que lo anuncie).
 var DefaultCapabilities = []string{
 	string(protocol.CommandDeploy),
 	string(protocol.CommandUndeploy),
 	string(protocol.CommandStatus),
 	string(protocol.CommandLogs),
+	string(protocol.CommandWriteSecret),
 }
 
 // ErrNotConnected se devuelve al intentar mandar sin conexión activa.
@@ -643,6 +646,17 @@ func commandNamespace(cmd protocol.Command) (ns string, serialize, ok bool) {
 	case protocol.CommandLogs:
 		if cmd.Logs != nil && cmd.Logs.Namespace != "" {
 			return cmd.Logs.Namespace, false, true
+		}
+	case protocol.CommandWriteSecret:
+		// Se serializa con los deploys del namespace para no pisar el Secret
+		// <app>-params entre dos escrituras concurrentes. Con target cloud el
+		// namespace puede venir vacío: se usa <app>-<scope> como clave.
+		if ws := cmd.WriteSecret; ws != nil && ws.App != "" {
+			ns := ws.Namespace
+			if ns == "" {
+				ns = ws.App + "-" + ws.Scope
+			}
+			return ns, true, true
 		}
 	}
 	return "", false, false

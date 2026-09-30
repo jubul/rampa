@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,9 @@ type fakeKube struct {
 	logLines     []string
 	logsErr      error
 	lastDeploy   *protocol.DeployCommand
+	writeKeys    []string
+	writeErr     error
+	lastWrite    *protocol.WriteSecretCommand
 }
 
 func (f *fakeKube) Deploy(_ context.Context, cmd *protocol.DeployCommand, report kube.Reporter) (*protocol.WorkloadStatus, error) {
@@ -42,6 +46,23 @@ func (f *fakeKube) Logs(_ context.Context, _ *protocol.LogsCommand, sink kube.Lo
 		return err
 	}
 	return sink(protocol.LogChunk{EOF: true})
+}
+
+func (f *fakeKube) WriteSecret(_ context.Context, cmd *protocol.WriteSecretCommand) ([]string, error) {
+	f.lastWrite = cmd
+	return f.writeKeys, f.writeErr
+}
+
+// fakeCloud es el gestor de secretos de nube de mentira.
+type fakeCloud struct {
+	keys []string
+	err  error
+	last *protocol.WriteSecretCommand
+}
+
+func (f *fakeCloud) WriteSecret(_ context.Context, cmd *protocol.WriteSecretCommand) ([]string, error) {
+	f.last = cmd
+	return f.keys, f.err
 }
 
 type memSink struct {
@@ -146,4 +167,61 @@ func TestOtherCommands(t *testing.T) {
 	for _, c := range []protocol.Command{{ID: "x", Kind: protocol.CommandUndeploy}, {ID: "x", Kind: protocol.CommandStatus}, {ID: "x", Kind: protocol.CommandLogs}} {
 		must(t, e.Execute(context.Background(), c, sink).Status == protocol.ResultRejected, "%s sin payload debería ser rejected", c.Kind)
 	}
+}
+
+func writeSecret(id, target string, values map[string]string) protocol.Command {
+	return protocol.Command{ID: id, Kind: protocol.CommandWriteSecret, WriteSecret: &protocol.WriteSecretCommand{
+		App: "checkout", Scope: "dev", Namespace: "checkout-dev", Target: target, Values: values,
+	}}
+}
+
+func TestWriteSecretOutcomes(t *testing.T) {
+	sink := &memSink{}
+	k := &fakeKube{writeKeys: []string{"API_KEY", "DB_URL"}}
+	cloud := &fakeCloud{keys: []string{"API_KEY"}}
+	e := &Executor{Kube: k, Cloud: cloud}
+	values := map[string]string{"DB_URL": "postgres://secreto", "API_KEY": "valor-secreto"}
+
+	res := e.Execute(context.Background(), writeSecret("w1", "kubernetes", values), sink)
+	must(t, res.Status == protocol.ResultSucceeded && res.CommandID == "w1", "kubernetes ok: %+v", res)
+	must(t, k.lastWrite != nil && k.lastWrite.Target == "kubernetes" && cloud.last == nil, "fue al kube: %+v %+v", k.lastWrite, cloud.last)
+	must(t, strings.Contains(res.Message, "Secret checkout-dev/checkout-params") && strings.Contains(res.Message, "API_KEY, DB_URL"), "mensaje: %s", res.Message)
+	must(t, len(sink.events) == 1 && sink.events[0].Reason == "SecretWritten" && strings.Contains(sink.events[0].Message, "API_KEY, DB_URL"), "evento: %+v", sink.events)
+	// Ni el result ni los eventos llevan valores.
+	for _, v := range values {
+		must(t, !strings.Contains(res.Message, v), "el result contiene un valor: %s", res.Message)
+		for _, ev := range sink.events {
+			must(t, !strings.Contains(ev.Message, v), "el evento contiene un valor: %s", ev.Message)
+		}
+	}
+
+	sink.reset()
+	res = e.Execute(context.Background(), writeSecret("w2", "cloud", values), sink)
+	must(t, res.Status == protocol.ResultSucceeded && cloud.last != nil && cloud.last.Target == "cloud", "cloud ok: %+v", res)
+	must(t, strings.Contains(res.Message, "rampa/checkout/dev/*") && strings.Contains(res.Message, "API_KEY"), "mensaje cloud: %s", res.Message)
+	must(t, len(sink.events) == 1 && sink.events[0].Reason == "SecretWritten", "evento cloud: %+v", sink.events)
+
+	k.writeErr = errors.New("el namespace no tiene la label")
+	res = e.Execute(context.Background(), writeSecret("w3", "kubernetes", values), sink)
+	must(t, res.Status == protocol.ResultFailed && res.Message == "el namespace no tiene la label", "kubernetes failed: %+v", res)
+
+	cloud.err = errors.New("sin permiso")
+	cloud.keys = nil
+	res = e.Execute(context.Background(), writeSecret("w4", "cloud", values), sink)
+	must(t, res.Status == protocol.ResultFailed && res.Message == "sin permiso", "cloud failed: %+v", res)
+
+	cloud.keys = []string{"A", "B"}
+	res = e.Execute(context.Background(), writeSecret("w4b", "cloud", values), sink)
+	must(t, res.Status == protocol.ResultFailed && strings.Contains(res.Message, "sin permiso") && strings.Contains(res.Message, "claves escritas antes del fallo: A, B"), "cloud parcial: %+v", res)
+
+	e.Cloud = nil
+	res = e.Execute(context.Background(), writeSecret("w5", "cloud", values), sink)
+	must(t, res.Status == protocol.ResultFailed && strings.Contains(res.Message, "no tiene configurado un gestor de secretos"), "sin cloud: %+v", res)
+
+	res = e.Execute(context.Background(), writeSecret("w6", "vault", values), sink)
+	must(t, res.Status == protocol.ResultRejected && strings.Contains(res.Message, `target "vault"`), "target desconocido: %+v", res)
+	res = e.Execute(context.Background(), writeSecret("w7", "kubernetes", nil), sink)
+	must(t, res.Status == protocol.ResultRejected, "sin valores: %+v", res)
+	res = e.Execute(context.Background(), protocol.Command{ID: "w8", Kind: protocol.CommandWriteSecret}, sink)
+	must(t, res.Status == protocol.ResultRejected, "sin payload: %+v", res)
 }

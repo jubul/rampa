@@ -1,0 +1,11 @@
+# Instalación por bootstrap token: lo que usan los cloud-init de las VMs con
+# k3s y los módulos de OpenTofu. El chart crea el Secret <release>-bootstrap,
+# el Role y RoleBinding sobre el Secret rampa-agent-token, y el agente canjea
+# el token al arrancar. Ni cluster.token ni cluster.existingSecret.
+api:
+  url: https://api.rampa.dev
+cluster:
+  bootstrapToken: rampa_bootstrap_ci_00000000000000000000000000
+image:
+  repository: ghcr.io/CHANGEME/rampa-agent
+  tag: "0.1.0"

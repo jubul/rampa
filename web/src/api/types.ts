@@ -39,6 +39,12 @@ export interface Membership {
 export interface Me {
   user: User;
   memberships: Membership[];
+  /** Idioma preferido del usuario (es o en). Si está, gana sobre el navegador. */
+  locale?: string | null;
+}
+
+export interface PatchMeRequest {
+  locale: string;
 }
 
 export interface OrgSettings {
@@ -92,12 +98,26 @@ export interface CreateTokenRequest {
 
 // Providers y cuentas de nube
 
-export type ProviderKind = "aws" | "gcp" | "azure";
+export type ProviderKind = "aws" | "gcp" | "azure" | "digitalocean" | "oci" | "ovh";
+
+/** federated: la cuenta se conecta sin secretos. token: se guarda un token del cliente, cifrado. */
+export type ProviderAuth = "federated" | "token";
+
+export interface LocalizedTerm {
+  es: string;
+  en: string;
+}
+
+export type TerminologyKey = "account" | "cluster" | "vm" | "registry" | "secret_store" | "region";
+
+export type Terminology = Partial<Record<TerminologyKey, LocalizedTerm>>;
 
 export interface Provider {
-  kind: ProviderKind;
+  kind: ProviderKind | string;
   display_name: string;
   available: boolean;
+  auth?: ProviderAuth;
+  terminology?: Terminology;
 }
 
 export interface InstructionField {
@@ -106,6 +126,8 @@ export interface InstructionField {
   placeholder?: string;
   help?: string;
   required: boolean;
+  /** true: se renderiza como password, se manda en el PATCH y no se vuelve a mostrar. */
+  secret?: boolean;
 }
 
 export interface Instructions {
@@ -126,7 +148,7 @@ export type CloudAccountStatus = "pending" | "connected" | "failed";
 
 export interface CloudAccount {
   id: string;
-  provider: ProviderKind;
+  provider: ProviderKind | string;
   name: string;
   region: string;
   external_ref: string;
@@ -134,11 +156,13 @@ export interface CloudAccount {
   status: CloudAccountStatus;
   verification: Verification | null;
   instructions: Instructions | null;
+  /** true si la cuenta (auth token) tiene credenciales guardadas. Nunca se devuelven. */
+  has_credentials?: boolean;
   created_at: string;
 }
 
 export interface CreateCloudAccountRequest {
-  provider: ProviderKind;
+  provider: ProviderKind | string;
   name: string;
   region: string;
 }
@@ -152,10 +176,13 @@ export interface PatchCloudAccountRequest {
 
 export type ClusterEnv = "nonprod" | "prod";
 export type ClusterStatus = "offline" | "online" | "failed";
+/** kubernetes: cluster administrado o registrado. vm: una máquina de un solo nodo con k3s. */
+export type ClusterKind = "kubernetes" | "vm";
 
 export interface Cluster {
   id: string;
   name: string;
+  kind?: ClusterKind;
   env: ClusterEnv;
   cloud_account_id: string;
   domain: string;
@@ -175,6 +202,11 @@ export interface Cluster {
 // se muestran una sola vez.
 export interface ClusterWithToken extends Cluster {
   token: string;
+  install_command: string;
+}
+
+// GET /clusters/{id}/install-command
+export interface InstallCommandResponse {
   install_command: string;
 }
 
@@ -220,8 +252,11 @@ export interface UpdateManifestRequest {
 
 export type ScopeStatus = "unbound" | "idle" | "deploying" | "healthy" | "degraded" | "failed" | "deleting";
 
+export type ScopeCompute = "kubernetes" | "serverless";
+
 export interface Scope {
   name: string;
+  compute?: ScopeCompute;
   ephemeral: boolean;
   declared: boolean;
   cluster_id: string | null;
@@ -345,6 +380,7 @@ export const EVENT_KINDS: readonly string[] = [
   "scope.progress",
   "scope.deleted",
   "scope.failed",
+  "scope.secrets_written",
   "deployment.requested",
   "deployment.awaiting_approval",
   "deployment.approved",
@@ -373,6 +409,8 @@ export interface SpecAutoscaling {
 
 export interface SpecScope {
   name: SpecScopeName | string;
+  /** kubernetes (default) o serverless. Solo se envía si no es el default. */
+  compute?: ScopeCompute | string;
   size: SpecSize | string;
   replicas: number;
   strategy: SpecStrategy | string;
@@ -483,14 +521,23 @@ export interface InfraModuleInput {
   name: string;
   label?: string;
   help?: string;
-  default?: string;
+  description?: string;
+  /** string (default), number, bool o list. */
+  type?: string;
+  required?: boolean;
+  /** Los secretos no se piden en este formulario. */
+  secret?: boolean;
+  default?: unknown;
   options?: string[];
 }
 
+export type InfraModuleKind = "cluster" | "vm";
+
 export interface InfraModule {
   provider: string;
-  kind: string;
+  kind: InfraModuleKind | string;
   module?: string;
+  description?: string;
   available: boolean;
   inputs?: InfraModuleInput[];
 }
@@ -506,10 +553,24 @@ export interface CreateInfraClusterRequest {
   cloud_account_id: string;
   name: string;
   env: ClusterEnv;
-  kubernetes_version: string;
-  domain: string;
-  ingress_class: string;
-  admin_principal_arns: string[];
+  /** Módulo elegido (por ejemplo digitalocean/droplet-k3s). */
+  module: string;
+  /** Valores de los inputs del módulo. */
+  inputs: Record<string, unknown>;
+  // Campos históricos del contrato: se repiten desde inputs cuando el módulo los declara.
+  kubernetes_version?: string;
+  domain?: string;
+  ingress_class?: string;
+  admin_principal_arns?: string[];
+}
+
+// Secretos de aplicación por scope
+export interface ScopeSecretsResponse {
+  keys: string[];
+}
+
+export interface PutScopeSecretsRequest {
+  values: Record<string, string>;
 }
 
 export interface VersionInfo {

@@ -30,6 +30,10 @@ import type {
   ListResponse,
   Me,
   Member,
+  InstallCommandResponse,
+  PatchMeRequest,
+  PutScopeSecretsRequest,
+  ScopeSecretsResponse,
   Org,
   PatchCloudAccountRequest,
   PatchOrgRequest,
@@ -42,6 +46,7 @@ import type {
 } from "./types";
 import { EVENT_KINDS } from "./types";
 import { parseLogEvent, type LogStreamEvent } from "../lib/infra";
+import i18n, { currentLocale } from "../i18n";
 
 export const API_BASE = "/v1";
 
@@ -88,7 +93,7 @@ export function isApiError(e: unknown): e is ApiError {
 export function errorMessage(e: unknown): string {
   if (isApiError(e)) return e.message;
   if (e instanceof Error) return e.message;
-  return "Ocurrió un error inesperado";
+  return i18n.t("errors.unexpected");
 }
 
 function isErrorBody(x: unknown): x is ApiErrorBody {
@@ -126,7 +131,8 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
 
-  const headers: Record<string, string> = { Accept: "application/json" };
+  // Los mensajes de la API salen en el idioma activo de la web.
+  const headers: Record<string, string> = { Accept: "application/json", "Accept-Language": currentLocale() };
   let body: string | undefined;
   if (opts.body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -145,9 +151,9 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   } catch (e) {
     clearTimeout(timeout);
     if (controller.signal.aborted && !opts.signal?.aborted) {
-      throw new ApiError(0, "timeout", "La API no respondió a tiempo");
+      throw new ApiError(0, "timeout", i18n.t("errors.timeout"));
     }
-    throw new ApiError(0, "network", "No se pudo conectar con la API");
+    throw new ApiError(0, "network", i18n.t("errors.network"));
   }
   clearTimeout(timeout);
 
@@ -165,7 +171,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     if (isErrorBody(data)) {
       throw new ApiError(res.status, data.error.code, data.error.message, data.error.details ?? []);
     }
-    throw new ApiError(res.status, codeForStatus(res.status), text || `Error HTTP ${res.status}`);
+    throw new ApiError(res.status, codeForStatus(res.status), text || i18n.t("errors.http", { status: res.status }));
   }
   return data as T;
 }
@@ -194,6 +200,8 @@ const enc = encodeURIComponent;
 
 export const auth = {
   me: (signal?: AbortSignal) => request<Me>("/me", { signal }),
+  /** Guarda el idioma preferido del usuario. */
+  patchMe: (body: PatchMeRequest) => request<Me>("/me", { method: "PATCH", body }),
   devLogin: (email: string) => request<Me>("/auth/dev-login", { method: "POST", body: { email } }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   /** URL a la que hay que navegar (no fetch) para arrancar el login OIDC. */
@@ -255,6 +263,9 @@ export const clusters = {
     request<Cluster>(`/orgs/${enc(org)}/clusters/${enc(id)}`, { signal }),
   create: (org: string, body: CreateClusterRequest) =>
     request<ClusterWithToken>(`/orgs/${enc(org)}/clusters`, { method: "POST", body }),
+  /** Comando de instalación con un bootstrap token nuevo (un solo uso, vence en 2 horas). No rota el token del cluster. */
+  installCommand: (org: string, id: string) =>
+    request<InstallCommandResponse>(`/orgs/${enc(org)}/clusters/${enc(id)}/install-command`),
   rotateToken: (org: string, id: string) =>
     request<ClusterWithToken>(`/orgs/${enc(org)}/clusters/${enc(id)}/rotate-token`, { method: "POST" }),
   remove: (org: string, id: string) => request<void>(`/orgs/${enc(org)}/clusters/${enc(id)}`, { method: "DELETE" }),
@@ -320,6 +331,18 @@ export const scopes = {
     request<void>(`/orgs/${enc(org)}/apps/${enc(app)}/scopes/${enc(scope)}`, { method: "DELETE" }),
 };
 
+// Secretos de aplicación por scope: la API nunca devuelve los valores, solo las claves.
+
+export const scopeSecrets = {
+  keys: (org: string, app: string, scope: string, signal?: AbortSignal) =>
+    request<ScopeSecretsResponse>(`/orgs/${enc(org)}/apps/${enc(app)}/scopes/${enc(scope)}/secrets`, { signal }),
+  put: (org: string, app: string, scope: string, body: PutScopeSecretsRequest) =>
+    request<ScopeSecretsResponse>(`/orgs/${enc(org)}/apps/${enc(app)}/scopes/${enc(scope)}/secrets`, {
+      method: "PUT",
+      body,
+    }),
+};
+
 // Deployments
 
 export const deployments = {
@@ -360,7 +383,7 @@ export const meta = {
   version: (signal?: AbortSignal) =>
     // /version está fuera de /v1.
     fetch("/version", { credentials: "include", signal }).then(async (r) => {
-      if (!r.ok) throw new ApiError(r.status, codeForStatus(r.status), `Error HTTP ${r.status}`);
+      if (!r.ok) throw new ApiError(r.status, codeForStatus(r.status), i18n.t("errors.http", { status: r.status }));
       return (await r.json()) as VersionInfo;
     }),
 };

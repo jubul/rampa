@@ -1,48 +1,65 @@
-import { useState } from "react";
-import { KeyRound } from "lucide-react";
-import type { Cluster, ClusterWithToken } from "../api/types";
-import { errorMessage } from "../api/client";
-import { useRotateClusterToken } from "../api/hooks";
+import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import { Terminal } from "lucide-react";
+import type { Cluster } from "../api/types";
+import { useInstallCommand } from "../api/hooks";
 import { Button } from "./ui/Button";
 import { CopyField } from "./ui/CopyField";
-import { InlineError, Notice } from "./ui/States";
+import { InlineError, LoadingState, Notice } from "./ui/States";
 
 /**
- * El install_command solo se entrega al crear el cluster o al rotar su token.
- * Este panel rota el token a pedido y muestra el comando para pegarlo.
+ * Muestra el comando de instalación del agente con GET /clusters/{id}/install-command.
+ * Cada consulta genera un bootstrap token nuevo (de un solo uso, vence en 2
+ * horas) y NO rota el token del cluster: el agente que ya está instalado sigue
+ * conectado.
  */
-export function InstallCommandPanel({ org, cluster, canRotate }: { org: string; cluster: Cluster; canRotate: boolean }) {
-  const rotate = useRotateClusterToken(org);
-  const [issued, setIssued] = useState<ClusterWithToken | null>(null);
+export function InstallCommandPanel({
+  org,
+  cluster,
+  canView,
+  autoLoad = false,
+}: {
+  org: string;
+  cluster: Pick<Cluster, "id" | "name">;
+  canView: boolean;
+  /** Pide el comando apenas se monta (por ejemplo dentro de un diálogo). */
+  autoLoad?: boolean;
+}) {
+  const { t } = useTranslation();
+  const fetchCmd = useInstallCommand(org);
+  const started = useRef(false);
 
-  if (issued) {
-    return (
-      <div className="space-y-3">
-        <Notice tone="amber">
-          <strong>Este comando se muestra una sola vez.</strong> El token anterior de {cluster.name} ya no vale.
-        </Notice>
-        <CopyField label="Comando de instalación" value={issued.install_command} multiline />
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (autoLoad && canView && !started.current) {
+      started.current = true;
+      fetchCmd.mutate(cluster.id);
+    }
+  }, [autoLoad, canView, cluster.id, fetchCmd]);
 
   return (
-    <div className="space-y-2">
-      <p className="text-xs text-slate-500">
-        Rampa guarda solo un hash del token, así que el comando no se puede volver a mostrar. Podés generar uno nuevo. Ojo: el token actual deja de valer, y si el cluster ya tenía un agente instalado va a desconectarse hasta que uses el comando nuevo.
-      </p>
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={!canRotate}
-        title={canRotate ? undefined : "Necesitás rol admin"}
-        loading={rotate.isPending}
-        icon={<KeyRound className="size-3.5" />}
-        onClick={() => rotate.mutate(cluster.id, { onSuccess: setIssued })}
-      >
-        Generar comando de instalación
-      </Button>
-      {rotate.isError && <InlineError error={new Error(errorMessage(rotate.error))} />}
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500 dark:text-slate-400">{t("installCommand.explain")}</p>
+      {fetchCmd.isPending && <LoadingState />}
+      {fetchCmd.data && (
+        <>
+          <Notice tone="amber">{t("installCommand.oneTime", { name: cluster.name })}</Notice>
+          <CopyField label={t("installCommand.label")} value={fetchCmd.data.install_command} multiline />
+        </>
+      )}
+      {fetchCmd.isError && <InlineError error={fetchCmd.error} />}
+      {!autoLoad || fetchCmd.isError || fetchCmd.data ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!canView}
+          title={canView ? undefined : t("common.needAdmin")}
+          loading={fetchCmd.isPending}
+          icon={<Terminal className="size-3.5" />}
+          onClick={() => fetchCmd.mutate(cluster.id)}
+        >
+          {fetchCmd.data ? t("installCommand.regenerate") : t("installCommand.show")}
+        </Button>
+      ) : null}
     </div>
   );
 }

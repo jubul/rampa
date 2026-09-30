@@ -6,10 +6,11 @@ Contrato entre el plano de control y sus clientes: la web, el CLI y los workflow
 
 - Base: `https://<api>/v1`. JSON en ambos sentidos. `snake_case`. Fechas RFC 3339 en UTC. Ids UUID v4 como strings.
 - En las rutas, `{org}` es el **slug** de la organización, `{app}` el **nombre** de la application y `{scope}` el nombre del scope. Los deployments, clusters y cuentas van por id.
-- Errores: código HTTP adecuado y cuerpo `{"error": {"code": "not_found", "message": "..."}}`. Códigos: `unauthorized`, `forbidden`, `not_found`, `invalid`, `conflict`, `internal`.
+- Errores: código HTTP adecuado y cuerpo `{"error": {"code": "not_found", "message": "..."}}`. Códigos: `unauthorized`, `forbidden`, `not_found`, `invalid`, `conflict`, `rate_limited`, `not_implemented`, `internal`.
 - Validación de `rampa.yaml`: cuando falla, `invalid` con `"details": ["spec.type ...", ...]`.
 - Listados devuelven `{"items": [...]}`. Sin paginación en la Fase A salvo eventos (`?limit=&before=`).
 - Toda tabla y todo query filtra por `org_id`. Un usuario solo ve organizaciones donde es miembro.
+- Idioma: los mensajes (`error.message`, `details`, textos de instrucciones) salen en el idioma de `Accept-Language` (`es` por defecto, `en`). Los `code` son estables y no dependen del idioma. `GET /v1/me` devuelve `locale` y `PATCH /v1/me` `{"locale": "en"}` lo guarda; si está seteado gana sobre el header.
 
 ## Autenticación
 
@@ -61,14 +62,16 @@ Un token nunca otorga más que su dueño hoy: el rol efectivo en cada request es
 
 ## Providers y cuentas de nube
 
-- `GET /v1/orgs/{org}/providers` → `{"items": [{"kind": "aws", "display_name": "Amazon Web Services", "available": true}]}`. Salen los tres; `available` dice si está implementado.
+- `GET /v1/orgs/{org}/providers` → `{"items": [{"kind": "aws", "display_name": "Amazon Web Services", "available": true, "auth": "federated|token", "terminology": {"account": {"es": "cuenta de AWS", "en": "AWS account"}, "cluster": {"es": "cluster EKS", "en": "EKS cluster"}, "vm": {"es": "instancia EC2", "en": "EC2 instance"}, "registry": {"es": "ECR", "en": "ECR"}, "secret_store": {"es": "Secrets Manager", "en": "Secrets Manager"}, "region": {"es": "región", "en": "region"}}}]}`. Salen todos los providers conocidos (aws, gcp, azure, digitalocean, oci, ovh); `available` dice si está implementado; `auth` dice si la cuenta se conecta por federación (sin secretos) o con un token del cliente. La web usa `terminology` en todos sus textos: en DigitalOcean dice Droplet y DOKS, en Azure máquina virtual y AKS.
 - `POST /v1/orgs/{org}/cloud-accounts` `{"provider": "aws", "name": "acme-prod", "region": "us-east-1"}` → `CloudAccount` en `status: "pending"` con `instructions` (ver `provider.Instructions`): la API genera el `external_id`, lo guarda en `settings`, y arma el link de CloudFormation. El cliente lo ejecuta y vuelve con el ARN del rol.
 - `PATCH /v1/orgs/{org}/cloud-accounts/{id}` `{"external_ref": "arn:aws:iam::123:role/RampaConnect", "settings": {...}}` → completa lo que pidió `instructions.fields`.
 - `POST /v1/orgs/{org}/cloud-accounts/{id}/verify` → corre `Provider.Verify`. `status` pasa a `connected` o `failed`; devuelve `CloudAccount` con `verification`.
 - `GET /v1/orgs/{org}/cloud-accounts`, `GET .../{id}`, `DELETE .../{id}` (falla con `conflict` si tiene clusters).
 - `GET /public/cloudformation/rampa-connect.yaml` → plantilla de CloudFormation para el rol de AWS. Pública, sin auth, la sirve la API desde `pkg/provider/aws`. La consola de CloudFormation solo acepta plantillas alojadas en S3, así que el link de quick-create (`instructions.url`) existe únicamente si `RAMPA_AWS_TEMPLATE_URL` apunta a una copia de esta plantilla en S3; sin esa variable `url` viene vacío y `instructions.command` descarga la plantilla desde esta ruta con `curl` y crea el stack con `--template-body file://rampa-connect.yaml`.
 
-`CloudAccount`: `{"id", "provider", "name", "region", "external_ref", "settings", "status", "verification": {"ok", "identity", "message"}|null, "instructions": Instructions|null, "created_at"}`. `settings` nunca contiene credenciales. `instructions` viene en todas las respuestas (no solo en el `POST`) y es `null` únicamente si el provider no está registrado en esa instalación; se arma con la `region` de la cuenta.
+`CloudAccount`: `{"id", "provider", "name", "region", "external_ref", "settings", "status", "verification": {"ok", "identity", "message"}|null, "instructions": Instructions|null, "has_credentials": false, "created_at"}`. `settings` nunca contiene credenciales. `instructions` viene en todas las respuestas (no solo en el `POST`) y es `null` únicamente si el provider no está registrado en esa instalación; se arma con la `region` de la cuenta.
+
+**Providers con `auth: token`** (DigitalOcean, OCI, OVH): `instructions.fields` incluye campos con `"secret": true` (por ejemplo `api_token`). Al hacer `PATCH` con esos campos (en `"credentials": {...}`, o dentro de `settings`, de donde se quitan) la API los cifra con AES-256-GCM (clave `RAMPA_STATE_KEY`, dato autenticado el id de la cuenta) y los guarda en `credentials_ciphertext`; nunca vuelven en ninguna respuesta, `has_credentials` pasa a `true`, y `verify` los usa para llamar a la nube. Volver a mandarlos los rota. `DELETE` de la cuenta borra el cifrado. Sin `RAMPA_STATE_KEY` estos providers responden `501`.
 
 `Instructions`: `{"title", "description", "url", "command", "fields": [{"name", "label", "placeholder", "help", "required"}]}`. `fields[].name` es `external_ref` o una clave de `settings`.
 
@@ -79,7 +82,16 @@ Un token nunca otorga más que su dueño hoy: el rol efectivo en cada request es
 - `POST /v1/orgs/{org}/clusters/{id}/rotate-token` → nuevo token, el anterior deja de valer. La conexión viva del agente, autenticada con el token viejo, se cierra en el acto (close `1008`); el agente reconecta con el nuevo.
 - `env` es `nonprod` o `prod`. Un scope `prod` solo puede vivir en un cluster `prod`; el resto solo en `nonprod`. Si la org tiene un solo cluster de cada env, es el default al desplegar.
 
-`Cluster`: `{"id", "name", "env", "cloud_account_id", "domain", "ingress_class", "secret_store", "status": "offline|online|failed", "agent_version", "kubernetes_version", "agent_role_arn", "infra_run_id", "last_seen_at", "created_at"}`. `failed` es un cluster cuyo run de infraestructura falló; `infra_run_id` es `""` si no lo creó Rampa.
+`Cluster`: `{"id", "name", "kind": "kubernetes|vm", "env", "cloud_account_id", "domain", "ingress_class", "secret_store", "status": "offline|online|failed", "agent_version", "kubernetes_version", "agent_role_arn", "infra_run_id", "last_seen_at", "created_at"}`. `failed` es un cluster cuyo run de infraestructura falló; `infra_run_id` es `""` si no lo creó Rampa.
+
+`kind` es `kubernetes` (cluster administrado o registrado) o `vm` (una máquina de un solo nodo con k3s creada por Rampa). `secret_store` acepta el nombre de un ClusterSecretStore de External Secrets o el valor especial `kubernetes`: en ese caso el chart no usa ExternalSecret y el agente mantiene el Secret `<app>-params` con lo que le manda la API.
+
+- `POST /v1/orgs/{org}/clusters/{id}/bootstrap-token` (admin) → 201 `{"bootstrap_token": "rampa_bootstrap_...", "expires_at", "cluster_id"}`. Es de un solo uso y vence en 2 horas. Sirve para instalar el agente donde el token real no debe quedar escrito (cloud-init de una VM, un script de instalación). El chart lo acepta en `cluster.bootstrapToken`.
+- `POST /v1/agent/bootstrap` `{"bootstrap_token": "..."}` sin sesión → `{"cluster_token": "rampa_cluster_...", "cluster_id", "api_url"}`. Marca el bootstrap como usado y rota el token del cluster (cierra la conexión de un agente anterior; evento `cluster.token_rotated` con `payload.via = "bootstrap"`). Un segundo intento responde `401`; más de 10 intentos por minuto por IP o por token, `429` con código `rate_limited`. El agente guarda el token en el Secret `rampa-agent-token` de su namespace y arranca normal.
+- `GET /public/charts/rampa-agent.tgz` → el chart del agente empaquetado, sin auth, para que un cloud-init lo instale con `helm install rampa-agent <url>`.
+- `GET /v1/orgs/{org}/clusters/{id}/install-command` (admin) → `{"install_command", "expires_at"}` regenerado con un bootstrap token nuevo, sin rotar el token del cluster.
+
+**Secretos de aplicación:** `PUT /v1/orgs/{org}/apps/{app}/scopes/{scope}/secrets` `{"values": {"API_KEY": "..."}}` (developer; prod requiere admin) → `202 {"keys": ["API_KEY"]}`. La API no persiste los valores: arma un comando `write_secret` al agente del cluster del scope con `target: kubernetes` (Secret `<app>-params` en el namespace del scope) o `target: cloud` (el agente escribe `rampa/<app>/<scope>/<NOMBRE>` en el gestor de secretos con su identidad de workload) según `secret_store` del cluster. El evento `scope.secrets_written` lleva solo las claves. `GET .../secrets` → `{"keys": [...]}` conocidas (sin valores). El payload de `agent_commands` para `write_secret` se guarda sin `values` (se sustituye por las claves) y el comando se entrega solo por la conexión viva; si el agente está offline responde `409`.
 
 **Conexión del agente:** `GET /v1/agent/connect` con `Authorization: Bearer <token del cluster>` y upgrade a WebSocket. Mensajes según `pkg/protocol`. La API:
 
@@ -104,7 +116,7 @@ Un token nunca otorga más que su dueño hoy: el rol efectivo en cada request es
 - `PUT /v1/orgs/{org}/apps/{app}/scopes/{scope}` `{"cluster_id": "..."}` → `200` con el `Scope` atado al cluster. `cluster_id` es opcional si la org tiene un solo cluster del env correcto. `conflict` si el scope está desplegado en otro cluster.
 - `DELETE /v1/orgs/{org}/apps/{app}/scopes/{scope}` → `202` con el `Scope` en `status: "deleting"`; encola `undeploy` y emite `scope.delete_requested`. Cuando el agente confirma, `scope.deleted`: los efímeros desaparecen y los permanentes vuelven a `idle`. Scopes permanentes requieren `admin`.
 
-`Scope`: `{"name", "ephemeral", "declared", "cluster_id", "namespace": "checkout-api-prod", "url": "https://checkout.acme.com", "status": "unbound|idle|deploying|healthy|degraded|failed|deleting", "current_deployment": Deployment|null, "size", "replicas", "strategy", "ttl_expires_at"}`.
+`Scope`: `{"name", "compute": "kubernetes|serverless", "ephemeral", "declared", "cluster_id", "namespace": "checkout-api-prod", "url": "https://checkout.acme.com", "status": "unbound|idle|deploying|healthy|degraded|failed|deleting", "current_deployment": Deployment|null, "size", "replicas", "strategy", "ttl_expires_at"}`.
 
 ## Applications sin YAML: spec estructurado
 
@@ -181,7 +193,7 @@ El primer caso es el cluster: el módulo `aws/eks-cluster` crea VPC, cluster EKS
 - `GET /v1/orgs/{org}/infra/runs?limit=20` → `{"items": [InfraRun]}`. `GET /v1/orgs/{org}/infra/runs/{id}` → `InfraRun`.
 - `GET /v1/orgs/{org}/infra/runs/{id}/log` → `text/plain` con el log completo. Con `?stream=1` (EventSource no puede mandar headers) responde Server-Sent Events: primero las líneas ya guardadas, después las nuevas en vivo (`event: line`, `data: <texto>`), `event: status` con `data: <estado>` en cada cambio, y cierra con `event: done` cuando el run termina.
 - `POST /v1/orgs/{org}/infra/runs/{id}/destroy` (admin) → encola `tofu destroy` con los mismos inputs; al terminar borra el cluster de Rampa si no tiene scopes. `POST .../retry` → vuelve a encolar un run `failed`.
-- `GET /v1/orgs/{org}/infra/modules` → `{"items": [{"provider": "aws", "kind": "cluster", "module": "aws/eks-cluster", "available": true, "inputs": [{"name": "kubernetes_version", "label": "...", "default": "1.33", "options": ["1.31","1.32","1.33","1.34"]}]}, {"provider": "gcp", "kind": "cluster", "available": false}, ...]}`. La web arma el formulario con esto. La respuesta incluye `"runner_ready": bool` y, si es `false`, `"runner_error"` con qué falta (tofu en el PATH o `RAMPA_STATE_KEY`).
+- `GET /v1/orgs/{org}/infra/modules` → `{"items": [{"provider": "aws", "kind": "cluster", "module": "aws/eks-cluster", "available": true, "secret_store": "aws-secrets-manager", "inputs": [{"name": "kubernetes_version", "type": "string|list|bool|number", "label": "...", "help": "...", "default": "1.33", "options": ["1.31","1.32","1.33","1.34"], "required": false}]}, {"provider": "gcp", "kind": "cluster", "available": false}, ...]}`. Los inputs se validan al crear el run (tipo, opciones, requeridos, formatos como CIDR o ARN; una clave desconocida es `invalid` con `inputs.<nombre>`). La web arma el formulario con esto. La respuesta incluye `"runner_ready": bool` y, si es `false`, `"runner_error"` con qué falta (tofu en el PATH o `RAMPA_STATE_KEY`).
 
 `InfraRun`: `{"id", "kind": "cluster", "provider": "aws", "module": "aws/eks-cluster", "cloud_account_id", "cluster_id", "name", "operation": "apply|destroy", "attempt": 1, "status", "inputs": {}, "outputs": {}, "error": "", "log_tail": ["..."], "requested_by": User, "created_at", "started_at", "finished_at"}`. Destroy y retry reencolan la misma fila (cambia `operation` y sube `attempt`) para que el estado de OpenTofu sea el mismo. Estados: `queued → initializing → planning → applying → succeeded | failed`, y `destroying → destroyed | failed`. `inputs` nunca incluye valores sensibles (el token del agente se inyecta en el momento de correr y no se persiste en el run).
 
@@ -193,7 +205,17 @@ El primer caso es el cluster: el módulo `aws/eks-cluster` crea VPC, cluster EKS
 
 Variables del servidor: `RAMPA_TOFU_BIN` (default `tofu`, buscado en `PATH`; si no está, los endpoints de infra responden `501 not_implemented` con cómo instalarlo), `RAMPA_STATE_KEY` (32 bytes en base64 o hex; requerido para infra), `RAMPA_INFRA_WORKDIR` (default el temp del sistema), `RAMPA_INFRA_TIMEOUT` (default `40m`), `RAMPA_INFRA_CONCURRENCY` (default `2`).
 
-Proveedores: `aws` con `eks-cluster` implementado. `gcp/gke-cluster`, `azure/aks-cluster`, `digitalocean/doks-cluster`, `oci/oke-cluster` figuran en `/infra/modules` con `available: false` hasta que existan sus módulos.
+Módulos por proveedor y tipo. `kind` es `cluster` (Kubernetes administrado) o `vm` (una máquina con k3s, que Rampa registra como `Cluster` con `kind: vm`):
+
+| Módulo | kind | Disponible | Qué crea |
+|---|---|---|---|
+| `aws/eks-cluster` | cluster | sí | VPC, EKS Auto Mode, IRSA, agente |
+| `aws/ec2-k3s` | vm | sí | Instancia EC2 en la VPC default con Elastic IP, security group (80, 443, 22 opcional), instance profile para ECR y Secrets Manager, k3s con cifrado de secretos, agente por bootstrap token, cert-manager opcional |
+| `digitalocean/droplet-k3s` | vm | sí | Droplet con IP reservada, firewall, k3s, agente por bootstrap token, DOCR configurado para pull, registro DNS comodín opcional, cert-manager opcional |
+| `digitalocean/doks-cluster` | cluster | sí | Cluster DOKS con node pool, DOCR integrado, agente por bootstrap token |
+| `gcp/gke-cluster`, `azure/aks-cluster`, `oci/oke-cluster`, `oci/compute-k3s`, `ovh/kube-cluster` | | no | Ola dos y tres |
+
+`POST /v1/orgs/{org}/infra/clusters` acepta `"module"` explícito (default: el módulo `cluster` del provider de la cuenta) y los inputs del módulo en `"inputs"`. Para módulos `vm` el cluster queda con `kind: vm` y `secret_store` según el provider (`kubernetes` en DigitalOcean y OVH, `aws-secrets-manager` en `aws/ec2-k3s`). El runner pasa al bloque `module` solo las variables que el módulo declara en sus `.tf` (y reexporta solo sus outputs), así que un módulo nuevo se suma sin tocar la API. Genera un `bootstrap_token` (un solo uso) y `agent_chart_url` = `<RAMPA_PUBLIC_URL>/public/charts/rampa-agent.tgz`; el módulo instala el agente con `cluster.bootstrapToken`.
 
 ## Deployments
 
@@ -255,6 +277,7 @@ Los eventos de `scope` y `deployment` llevan siempre `payload.app` y `payload.sc
 | `RAMPA_INFRA_WORKDIR` | temp del sistema | Directorio de trabajo de los runs |
 | `RAMPA_INFRA_TIMEOUT` | `40m` | Tiempo máximo de un run |
 | `RAMPA_INFRA_CONCURRENCY` | `2` | Runs simultáneos |
+| `RAMPA_TRUSTED_PROXIES` | vacío | CIDRs (o IPs) de los proxies inversos delante de la API, separados por coma (por ejemplo `10.0.0.0/8,192.168.1.7`). Solo cuando la conexión viene de uno de ellos se honran `X-Forwarded-For` (el último salto que no es de confianza) y `X-Real-IP` para resolver la IP del cliente; desde cualquier otra dirección esos headers se ignoran. Vacío: la IP del cliente es siempre la del socket. Es la IP que usa el límite de `POST /v1/agent/bootstrap`, así que detrás de un proxy hay que configurarla o todos los agentes comparten un solo bucket |
 | `RAMPA_AWS_TRUSTED_PRINCIPAL_ARN` | vacío | Identidad IAM del plano de control (rol o usuario) que asume los roles de los clientes. Sin esto `verify` de cuentas AWS falla con un mensaje claro |
 | `RAMPA_AWS_DEFAULT_REGION` | `us-east-1` | Región para el link de CloudFormation y el cliente STS base cuando la cuenta no trae una |
 | `RAMPA_AWS_TEMPLATE_URL` | vacío | URL en S3 (o CloudFront delante de S3) de una copia de `rampa-connect.yaml`. Si está, `instructions.url` es el link de quick-create de CloudFormation; si no, no hay link y `instructions.command` descarga la plantilla desde la API y usa `--template-body` |

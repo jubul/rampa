@@ -26,6 +26,9 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.ShutdownGrace != client.DefaultShutdownGrace {
 		t.Errorf("shutdown grace por defecto: %s", cfg.ShutdownGrace)
 	}
+	if cfg.Namespace != "rampa-system" || cfg.BootstrapToken != "" {
+		t.Errorf("defaults de bootstrap: %+v", cfg)
+	}
 
 	cfg, err = loadConfig(env(map[string]string{
 		"RAMPA_API_URL": "http://localhost:8080", "RAMPA_CLUSTER_TOKEN": "t", "RAMPA_SHUTDOWN_GRACE": " 2m ",
@@ -52,11 +55,26 @@ func TestLoadConfig(t *testing.T) {
 		t.Errorf("config: %+v", cfg)
 	}
 
+	// Sin RAMPA_CLUSTER_TOKEN la config es válida: el token se resuelve después
+	// (Secret del namespace o canje del bootstrap token).
+	cfg, err = loadConfig(env(map[string]string{
+		"RAMPA_API_URL": "https://api.rampa.dev", "RAMPA_BOOTSTRAP_TOKEN": " rampa_bootstrap_x ", "RAMPA_NAMESPACE": " rampa-agente ",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "" || cfg.BootstrapToken != "rampa_bootstrap_x" || cfg.Namespace != "rampa-agente" {
+		t.Errorf("config de bootstrap: %+v", cfg)
+	}
+	if _, err := loadConfig(env(map[string]string{"RAMPA_API_URL": "https://api.rampa.dev"})); err != nil {
+		t.Errorf("sin ningún token la config carga igual (el resolutor decide): %v", err)
+	}
+
 	_, err = loadConfig(env(map[string]string{"RAMPA_LOG_LEVEL": "loud"}))
 	if err == nil {
 		t.Fatal("esperaba errores")
 	}
-	for _, want := range []string{"RAMPA_API_URL", "RAMPA_CLUSTER_TOKEN", "RAMPA_LOG_LEVEL"} {
+	for _, want := range []string{"RAMPA_API_URL", "RAMPA_LOG_LEVEL"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("el error debería mencionar %s: %v", want, err)
 		}

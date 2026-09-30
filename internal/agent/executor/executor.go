@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"rampa.dev/internal/agent/client"
@@ -20,12 +21,23 @@ type Kube interface {
 	Undeploy(ctx context.Context, cmd *protocol.UndeployCommand, report kube.Reporter) error
 	Status(ctx context.Context, cmd *protocol.StatusCommand) (*protocol.WorkloadStatus, error)
 	Logs(ctx context.Context, cmd *protocol.LogsCommand, sink kube.LogSink) error
+	// WriteSecret escribe el Secret <app>-params (target kubernetes) y devuelve las claves escritas.
+	WriteSecret(ctx context.Context, cmd *protocol.WriteSecretCommand) ([]string, error)
+}
+
+// CloudSecrets escribe secretos en el gestor de secretos de la nube (target
+// cloud) con la identidad de workload del agente. *cloud.AWSSecretsManager lo
+// implementa.
+type CloudSecrets interface {
+	WriteSecret(ctx context.Context, cmd *protocol.WriteSecretCommand) ([]string, error)
 }
 
 // Executor implementa client.Executor sobre un cluster.
 type Executor struct {
 	Kube Kube
-	Log  *slog.Logger
+	// Cloud es opcional: sin él, write_secret con target cloud falla con un mensaje claro.
+	Cloud CloudSecrets
+	Log   *slog.Logger
 	// DefaultDeployTimeout se usa si el comando no trae timeout_seconds. Default 10m.
 	DefaultDeployTimeout time.Duration
 }
@@ -106,12 +118,61 @@ func (e *Executor) Execute(ctx context.Context, cmd protocol.Command, sink clien
 		}
 		res.Status = protocol.ResultSucceeded
 		res.Message = "logs enviados"
+	case protocol.CommandWriteSecret:
+		return e.writeSecret(ctx, cmd, res, report)
 	default:
 		return rejected(res, fmt.Sprintf("comando %q no soportado por este agente", cmd.Kind))
 	}
 	if ctx.Err() != nil && res.Status == protocol.ResultFailed {
 		res.Message = "el agente se está apagando: " + res.Message
 	}
+	return res
+}
+
+// writeSecret ejecuta write_secret según el target. El result y el evento
+// llevan solo las claves: los valores no salen del comando.
+func (e *Executor) writeSecret(ctx context.Context, cmd protocol.Command, res protocol.Result, report kube.Reporter) protocol.Result {
+	ws := cmd.WriteSecret
+	if ws == nil {
+		return rejected(res, "el comando write_secret no trae payload")
+	}
+	if len(ws.Values) == 0 {
+		return rejected(res, "el comando write_secret no trae valores")
+	}
+	var (
+		keys        []string
+		err         error
+		destination string
+	)
+	switch ws.Target {
+	case kube.TargetKubernetes:
+		destination = fmt.Sprintf("Secret %s/%s", ws.Namespace, kube.ParamsSecretName(ws.App))
+		keys, err = e.Kube.WriteSecret(ctx, ws)
+	case kube.TargetCloud:
+		destination = fmt.Sprintf("el gestor de secretos de la nube (rampa/%s/%s/*)", ws.App, ws.Scope)
+		if e.Cloud == nil {
+			err = errors.New("este agente no tiene configurado un gestor de secretos de nube; usá secret_store kubernetes en el cluster o instalá el agente con identidad de nube")
+			break
+		}
+		keys, err = e.Cloud.WriteSecret(ctx, ws)
+	default:
+		return rejected(res, fmt.Sprintf("target %q de write_secret no soportado (kubernetes, cloud)", ws.Target))
+	}
+	if err != nil {
+		res.Status = protocol.ResultFailed
+		res.Message = err.Error()
+		if ws.Target == kube.TargetCloud && len(keys) > 0 {
+			res.Message += "; claves escritas antes del fallo: " + strings.Join(keys, ", ")
+		}
+		if ctx.Err() != nil {
+			res.Message = "el agente se está apagando: " + res.Message
+		}
+		return res
+	}
+	list := strings.Join(keys, ", ")
+	report(protocol.PhaseHealthy, "SecretWritten", kube.ParamsSecretName(ws.App), fmt.Sprintf("claves escritas en %s: %s", destination, list))
+	res.Status = protocol.ResultSucceeded
+	res.Message = fmt.Sprintf("%d claves escritas en %s: %s", len(keys), destination, list)
 	return res
 }
 

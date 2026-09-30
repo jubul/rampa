@@ -12,6 +12,6 @@ RUN go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/rampa-agent ./c
 # Sin shell, sin root, sin paquetes: solo el binario y los certificados de CA.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/rampa-agent /rampa-agent
-USER nonroot:nonroot
+USER 65532:65532
 EXPOSE 8081
 ENTRYPOINT ["/rampa-agent"]

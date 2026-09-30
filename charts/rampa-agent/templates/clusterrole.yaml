@@ -10,85 +10,95 @@ metadata:
   labels:
     {{- include "rampa-agent.labels" . | nindent 4 }}
 rules:
-  # Namespaces: cada scope vive en su propio namespace. Deploy crea el namespace
-  # si no existe y le pone labels; undeploy lo borra completo.
+  # Namespaces: cada scope vive en su propio namespace <app>-<scope>.
+  # ensureNamespace y ensureAppNamespace (deploy y write_secret) hacen get,
+  # create y update de labels; Undeploy hace get y delete. No se usa list.
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, create, update, delete]
 
-  # Deployments: el workload de las apps con strategy rolling (api, worker, static).
-  # Se aplican con server-side apply y se observan hasta que estén sanos.
+  # Workloads de las apps: Deployment (strategy rolling), Rollout de Argo
+  # Rollouts (canary o bluegreen; si el cluster no lo tiene, la regla no
+  # molesta) y CronJob (apps de tipo cron). Deploy aplica con server-side apply
+  # (patch, y create cuando el objeto no existe), workload.go hace get para
+  # observarlos y prune hace list y delete. No hay Jobs ni watch en el agente.
   - apiGroups: [apps]
     resources: [deployments]
-    verbs: [get, list, watch, create, update, patch, delete]
-
-  # ReplicaSets: solo lectura. Sirven para identificar la revisión nueva de un
-  # Deployment y observar solo sus pods durante el rollout, así un pod viejo en
-  # CrashLoopBackOff no hace fallar el deploy que lo arregla.
-  - apiGroups: [apps]
-    resources: [replicasets]
-    verbs: [get, list, watch]
-
-  # Rollouts de Argo Rollouts: el workload cuando la strategy es canary o bluegreen.
-  # Si el cluster no tiene Argo Rollouts instalado, la regla no molesta.
+    verbs: [get, list, create, patch, delete]
   - apiGroups: [argoproj.io]
     resources: [rollouts]
-    verbs: [get, list, watch, create, update, patch, delete]
-
-  # CronJobs: las apps de tipo cron. Jobs: los que genera el CronJob (para
-  # observar su estado y limpiar) y, en la Fase C, los Jobs de OpenTofu que
-  # provisionan services.
+    verbs: [get, list, create, patch, delete]
   - apiGroups: [batch]
-    resources: [cronjobs, jobs]
-    verbs: [get, list, watch, create, update, patch, delete]
+    resources: [cronjobs]
+    verbs: [get, list, create, patch, delete]
 
-  # Objetos de namespace que genera el chart rampa-app para cada scope:
-  # Service (tráfico), ServiceAccount (identidad de nube por app) y
-  # ResourceQuota (cuota de los scopes efímeros). Se crean, actualizan y
-  # borran junto con el deploy (prune de lo que ya no está en el render).
+  # ReplicaSets: solo list (workload.go). Sirven para identificar la revisión
+  # nueva de un Deployment y observar solo sus pods durante el rollout, así un
+  # pod viejo en CrashLoopBackOff no hace fallar el deploy que lo arregla.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list]
+
+  # Objetos de namespace que genera el chart rampa-app: Service, ServiceAccount
+  # (identidad de nube por app), ResourceQuota (scopes efímeros), Ingress, HPA
+  # y PDB. Deploy los aplica con server-side apply (create y patch) y prune
+  # hace list y delete de lo que ya no está en el render. Nunca se leen por get.
   - apiGroups: [""]
     resources: [services, serviceaccounts, resourcequotas]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [list, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [list, create, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list, create, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [list, create, patch, delete]
 
-  # Pods y sus logs: solo lectura. Para saber por qué un rollout no avanza
-  # (ImagePullBackOff, CrashLoopBackOff) y para el comando "logs" que hace
-  # tail de un pod hacia la web. El agente nunca crea ni borra pods.
+  # External Secrets: ExternalSecret trae los parameters secretos de cada app
+  # desde el secret manager de la nube (apply y prune, igual que lo anterior).
+  # Si el cluster no tiene ESO instalado, la regla no molesta. El agente no
+  # toca el ClusterSecretStore: lo instala Helm con este chart.
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [list, create, patch, delete]
+
+  # Pods: solo list (workload.go y logs.go). Para saber por qué un rollout no
+  # avanza (ImagePullBackOff, CrashLoopBackOff) y elegir el pod del comando
+  # "logs". El agente nunca crea ni borra pods.
   - apiGroups: [""]
-    resources: [pods, pods/log]
-    verbs: [get, list, watch]
+    resources: [pods]
+    verbs: [list]
 
-  # Nodos: solo listar, para contar cuántos hay en el heartbeat. Es informativo:
-  # si se quita la regla el agente reporta nodes: 0 y sigue funcionando.
+  # Logs de pods: solo get (Pods().GetLogs en logs.go) para el tail hacia la web.
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+
+  # Nodos: solo list (Client.NodeCount) para contar cuántos hay en el
+  # heartbeat. Es informativo: sin la regla el agente reporta nodes: 0.
   - apiGroups: [""]
     resources: [nodes]
     verbs: [list]
 
-  # Eventos de Kubernetes: solo lectura. Se reenvían al plano de control como
-  # detalle de un deploy (FailedScheduling, Unhealthy, etc.).
+{{- if .Values.rbac.appSecrets }}
+
+  # Secrets de las apps: el comando write_secret con target kubernetes hace
+  # get, create y update del Secret <app>-params (secret.go). Lo usa un cluster
+  # con secret_store: kubernetes (VMs con k3s, nubes sin gestor de secretos).
+  #
+  # Alcance real: a nivel cluster, get permite leer CUALQUIER Secret de
+  # CUALQUIER namespace si se conoce su nombre, y create/update permite
+  # escribirlos. Lo que lo acota es el código del agente (exige namespace
+  # <app>-<scope> con la label rampa.dev/app de la app, no toca namespaces del
+  # sistema ni Secrets de otro tipo, de otro administrador o de External
+  # Secrets) y que no hay list ni watch: no se pueden enumerar. RBAC por sí
+  # solo no impone esa restricción. Si tu cluster usa un gestor de secretos de
+  # nube vía ESO, rbac.appSecrets=false quita esta regla y el agente no tiene
+  # ningún permiso sobre secrets.
   - apiGroups: [""]
-    resources: [events]
-    verbs: [get, list, watch]
-
-  # Ingress: la URL de cada scope (<app>-<scope>.<dominio del cluster> o el domain propio).
-  - apiGroups: [networking.k8s.io]
-    resources: [ingresses]
-    verbs: [get, list, watch, create, update, patch, delete]
-
-  # HPA: autoscaling declarado en el rampa.yaml del scope.
-  - apiGroups: [autoscaling]
-    resources: [horizontalpodautoscalers]
-    verbs: [get, list, watch, create, update, patch, delete]
-
-  # PDB: se genera cuando un scope tiene más de una réplica.
-  - apiGroups: [policy]
-    resources: [poddisruptionbudgets]
-    verbs: [get, list, watch, create, update, patch, delete]
-
-  # External Secrets: ExternalSecret trae los parameters secretos de cada app
-  # desde el secret manager de la nube; ClusterSecretStore es el que instala
-  # este chart (secretStore.enabled) y el agente puede reconciliar. Si el
-  # cluster no tiene ESO instalado, la regla no molesta.
-  - apiGroups: [external-secrets.io]
-    resources: [externalsecrets, clustersecretstores]
-    verbs: [get, list, watch, create, update, patch, delete]
+    resources: [secrets]
+    verbs: [get, create, update]
+{{- end }}
 {{- end }}

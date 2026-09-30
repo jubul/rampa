@@ -26,9 +26,9 @@ func docsSpec() map[string]any {
 		"name": "checkout-api", "team": "payments", "tier": 2, "description": "API de checkout",
 		"type": "api", "runtime": "go", "port": 8080, "healthcheck": "/health", "schedule": "",
 		"scopes": []map[string]any{
-			{"name": "dev", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": nil, "ttl": ""},
-			{"name": "prod", "size": "M", "replicas": 3, "strategy": "canary", "domain": "checkout.acme.com", "autoscaling": map[string]int{"min": 3, "max": 10, "cpu": 70}, "ttl": ""},
-			{"name": "pr", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": nil, "ttl": "72h"},
+			{"name": "dev", "compute": "kubernetes", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": nil, "ttl": ""},
+			{"name": "prod", "compute": "kubernetes", "size": "M", "replicas": 3, "strategy": "canary", "domain": "checkout.acme.com", "autoscaling": map[string]int{"min": 3, "max": 10, "cpu": 70}, "ttl": ""},
+			{"name": "pr", "compute": "kubernetes", "size": "S", "replicas": 1, "strategy": "rolling", "domain": "", "autoscaling": nil, "ttl": "72h"},
 		},
 		"parameters": []map[string]any{
 			{"name": "LOG_LEVEL", "source": "value", "value": "info", "scopes": []string{}},
@@ -355,8 +355,11 @@ func TestInfraNotConfigured(t *testing.T) {
 	}
 	mods := c.must(http.MethodGet, "/v1/orgs/noinfra/infra/modules", nil, http.StatusOK)
 	items := itemsOf(mods)
-	if mods["runner_ready"] != false || len(items) != 5 || items[0]["module"] != "aws/eks-cluster" || items[0]["available"] != true || items[1]["available"] != false {
+	if mods["runner_ready"] != false || len(items) != 9 || items[0]["module"] != "aws/eks-cluster" || items[0]["available"] != true || items[3]["available"] != true || items[4]["available"] != false {
 		t.Errorf("modules: %v", mods)
+	}
+	if items[3]["module"] != "digitalocean/droplet-k3s" || items[3]["kind"] != "vm" || items[3]["secret_store"] != "kubernetes" {
+		t.Errorf("módulo de droplet: %v", items[3])
 	}
 	if inputs, _ := items[0]["inputs"].([]any); len(inputs) == 0 || inputs[0].(map[string]any)["name"] != "kubernetes_version" {
 		t.Errorf("inputs del módulo: %v", items[0]["inputs"])
@@ -425,15 +428,20 @@ func TestInfraClusterFlow(t *testing.T) {
 
 	// Validaciones del formulario.
 	for name, mutate := range map[string]func(m map[string]any){
-		"nombre":   func(m map[string]any) { m["name"] = "1abc" },
-		"env":      func(m map[string]any) { m["env"] = "qa" },
-		"version":  func(m map[string]any) { m["kubernetes_version"] = "1.20" },
-		"vpc":      func(m map[string]any) { m["vpc_cidr"] = "abc" },
-		"vpc /8":   func(m map[string]any) { m["vpc_cidr"] = "10.0.0.0/8" },
-		"arn":      func(m map[string]any) { m["admin_principal_arns"] = []string{"juan"} },
-		"dominio":  func(m map[string]any) { m["domain"] = "" },
-		"cuenta":   func(m map[string]any) { m["cloud_account_id"] = "" },
-		"sin body": func(m map[string]any) { clear(m) },
+		"nombre":                  func(m map[string]any) { m["name"] = "1abc" },
+		"env":                     func(m map[string]any) { m["env"] = "qa" },
+		"version":                 func(m map[string]any) { m["kubernetes_version"] = "1.20" },
+		"vpc":                     func(m map[string]any) { m["vpc_cidr"] = "abc" },
+		"vpc /8":                  func(m map[string]any) { m["vpc_cidr"] = "10.0.0.0/8" },
+		"arn":                     func(m map[string]any) { m["admin_principal_arns"] = []string{"juan"} },
+		"dominio":                 func(m map[string]any) { m["domain"] = "" },
+		"cuenta":                  func(m map[string]any) { m["cloud_account_id"] = "" },
+		"sin body":                func(m map[string]any) { clear(m) },
+		"módulo de otro provider": func(m map[string]any) { m["module"] = "digitalocean/droplet-k3s" },
+		"módulo desconocido":      func(m map[string]any) { m["module"] = "aws/nada" },
+		"input desconocido":       func(m map[string]any) { m["inputs"] = map[string]any{"size": "s-2vcpu-2gb"} },
+		"input mal tipado":        func(m map[string]any) { m["inputs"] = map[string]any{"vpc_cidr": 10} },
+		"input fuera de opciones": func(m map[string]any) { m["inputs"] = map[string]any{"kubernetes_version": "1.20"} },
 	} {
 		m := map[string]any{}
 		for k, v := range body {
@@ -463,17 +471,20 @@ func TestInfraClusterFlow(t *testing.T) {
 		t.Errorf("requested_by: %v", run["requested_by"])
 	}
 	inputs, _ := run["inputs"].(map[string]any)
-	if inputs["api_url"] != "http://api.test.local" || inputs["vpc_cidr"] != "10.50.0.0/16" || inputs["agent_image_tag"] != "2.0" || inputs["kubernetes_version"] != "1.33" {
+	if inputs["api_url"] != "http://api.test.local" || inputs["vpc_cidr"] != "10.50.0.0/16" || inputs["agent_image_tag"] != "2.0" || inputs["kubernetes_version"] != "1.33" || inputs["agent_chart_url"] != "http://api.test.local/public/charts/rampa-agent.tgz" {
 		t.Errorf("inputs: %v", inputs)
 	}
 	if _, has := inputs["agent_token"]; has {
 		t.Error("inputs no lleva el token")
 	}
+	if _, has := inputs["bootstrap_token"]; has {
+		t.Error("inputs no lleva el bootstrap token")
+	}
 	if status, _ := c.do(http.MethodPost, "/v1/orgs/acme/infra/clusters", body); status != http.StatusConflict {
 		t.Errorf("mismo nombre de cluster: %d", status)
 	}
 	cl := c.must(http.MethodGet, "/v1/orgs/acme/clusters/"+clusterID, nil, http.StatusOK)
-	if cl["infra_run_id"] != runID || cl["status"] != "offline" || cl["agent_role_arn"] != "" || cl["domain"] != "apps.dev.acme.com" {
+	if cl["infra_run_id"] != runID || cl["status"] != "offline" || cl["agent_role_arn"] != "" || cl["domain"] != "apps.dev.acme.com" || cl["kind"] != "kubernetes" || cl["secret_store"] != "aws-secrets-manager" {
 		t.Fatalf("cluster recién creado: %v", cl)
 	}
 

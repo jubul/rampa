@@ -58,6 +58,22 @@ func (p *Provider) DisplayName() string { return "Microsoft Azure" }
 // Available implementa provider.Provider. Azure llega en la Fase D.
 func (p *Provider) Available() bool { return false }
 
+// Auth implementa provider.Provider: credencial federada de Entra ID, sin client secret.
+func (p *Provider) Auth() provider.AuthKind { return provider.AuthFederated }
+
+// Terminology implementa provider.Provider con los nombres de Azure.
+func (p *Provider) Terminology() provider.Terminology {
+	return provider.Terminology{
+		Account:     provider.LocalizedTerm{ES: "suscripción de Azure", EN: "Azure subscription"},
+		Project:     provider.LocalizedTerm{ES: "grupo de recursos", EN: "resource group"},
+		Cluster:     provider.LocalizedTerm{ES: "cluster AKS", EN: "AKS cluster"},
+		VM:          provider.LocalizedTerm{ES: "máquina virtual", EN: "virtual machine"},
+		Registry:    provider.LocalizedTerm{ES: "ACR", EN: "ACR"},
+		SecretStore: provider.LocalizedTerm{ES: "Key Vault", EN: "Key Vault"},
+		Region:      provider.LocalizedTerm{ES: "región", EN: "region"},
+	}
+}
+
 // ConnectInstructions describe la conexión por App registration con credencial
 // federada: Entra ID confía en el issuer de Rampa y el plano de control obtiene
 // tokens sin client secret.

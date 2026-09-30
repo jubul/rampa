@@ -7,12 +7,12 @@ import (
 	"github.com/google/uuid"
 )
 
-const cloudAccountColumns = "id, org_id, provider, name, region, external_ref, settings, status, verification, created_at, updated_at"
+const cloudAccountColumns = "id, org_id, provider, name, region, external_ref, settings, status, verification, (credentials_ciphertext IS NOT NULL), created_at, updated_at"
 
 func scanCloudAccount(row interface{ Scan(dest ...any) error }) (*CloudAccount, error) {
 	var a CloudAccount
 	var settings, verification []byte
-	if err := row.Scan(&a.ID, &a.OrgID, &a.Provider, &a.Name, &a.Region, &a.ExternalRef, &settings, &a.Status, &verification, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.OrgID, &a.Provider, &a.Name, &a.Region, &a.ExternalRef, &settings, &a.Status, &verification, &a.HasCredentials, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, translate(err)
 	}
 	a.Settings = map[string]string{}
@@ -75,6 +75,29 @@ func (s *Store) SetCloudAccountVerification(ctx context.Context, orgID, id, stat
 		WHERE org_id = $1 AND id = $2 RETURNING `+cloudAccountColumns, orgID, id, status, b))
 }
 
+// SetCloudAccountCredentials guarda las credenciales cifradas de la cuenta (o
+// las borra con nil). El cifrado es cosa del llamador (internal/api/crypto,
+// con el id de la cuenta como dato autenticado). Vuelve a pending: hay que
+// verificar de nuevo con las credenciales nuevas.
+func (s *Store) SetCloudAccountCredentials(ctx context.Context, orgID, id string, ciphertext []byte) (*CloudAccount, error) {
+	var ct any
+	if len(ciphertext) > 0 {
+		ct = ciphertext
+	}
+	return scanCloudAccount(s.db.QueryRow(ctx, `UPDATE cloud_accounts SET credentials_ciphertext = $3, status = $4, updated_at = now()
+		WHERE org_id = $1 AND id = $2 RETURNING `+cloudAccountColumns, orgID, id, ct, CloudAccountPending))
+}
+
+// GetCloudAccountCredentials devuelve el cifrado de las credenciales, o nil si
+// la cuenta no tiene. ErrNotFound si la cuenta no existe.
+func (s *Store) GetCloudAccountCredentials(ctx context.Context, orgID, id string) ([]byte, error) {
+	var ct []byte
+	if err := s.db.QueryRow(ctx, `SELECT credentials_ciphertext FROM cloud_accounts WHERE org_id = $1 AND id = $2`, orgID, id).Scan(&ct); err != nil {
+		return nil, translate(err)
+	}
+	return ct, nil
+}
+
 // DeleteCloudAccount borra la cuenta. Devuelve ErrConflict si tiene clusters.
 func (s *Store) DeleteCloudAccount(ctx context.Context, orgID, id string) error {
 	var n int
@@ -96,12 +119,12 @@ func (s *Store) DeleteCloudAccount(ctx context.Context, orgID, id string) error 
 
 // ---- clusters ----
 
-const clusterColumns = "id, org_id, cloud_account_id, name, env, token_hash, agent_version, k8s_version, last_seen_at, status, domain, ingress_class, secret_store, agent_role_arn, infra_run_id, created_at, updated_at"
+const clusterColumns = "id, org_id, cloud_account_id, name, kind, env, token_hash, agent_version, k8s_version, last_seen_at, status, domain, ingress_class, secret_store, agent_role_arn, infra_run_id, created_at, updated_at"
 
 func scanCluster(row interface{ Scan(dest ...any) error }) (*Cluster, error) {
 	var c Cluster
 	var infraRunID *string
-	if err := row.Scan(&c.ID, &c.OrgID, &c.CloudAccountID, &c.Name, &c.Env, &c.TokenHash, &c.AgentVersion, &c.KubernetesVersion, &c.LastSeenAt, &c.Status, &c.Domain, &c.IngressClass, &c.SecretStore, &c.AgentRoleARN, &infraRunID, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.OrgID, &c.CloudAccountID, &c.Name, &c.Kind, &c.Env, &c.TokenHash, &c.AgentVersion, &c.KubernetesVersion, &c.LastSeenAt, &c.Status, &c.Domain, &c.IngressClass, &c.SecretStore, &c.AgentRoleARN, &infraRunID, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, translate(err)
 	}
 	c.InfraRunID = ptrString(infraRunID)
@@ -110,14 +133,19 @@ func scanCluster(row interface{ Scan(dest ...any) error }) (*Cluster, error) {
 
 // CreateCluster crea el cluster con su token ya hasheado. Si c.ID viene
 // seteado se respeta (el run de infraestructura lo necesita antes de insertar).
+// Kind vacío es kubernetes.
 func (s *Store) CreateCluster(ctx context.Context, c *Cluster) (*Cluster, error) {
 	id := c.ID
 	if id == "" {
 		id = uuid.NewString()
 	}
-	return scanCluster(s.db.QueryRow(ctx, `INSERT INTO clusters (id, org_id, cloud_account_id, name, env, token_hash, domain, ingress_class, secret_store, status, agent_role_arn, infra_run_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING `+clusterColumns,
-		id, c.OrgID, c.CloudAccountID, c.Name, c.Env, c.TokenHash, c.Domain, c.IngressClass, c.SecretStore, ClusterOffline, c.AgentRoleARN, nullString(c.InfraRunID)))
+	kind := c.Kind
+	if kind == "" {
+		kind = ClusterKindKubernetes
+	}
+	return scanCluster(s.db.QueryRow(ctx, `INSERT INTO clusters (id, org_id, cloud_account_id, name, kind, env, token_hash, domain, ingress_class, secret_store, status, agent_role_arn, infra_run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING `+clusterColumns,
+		id, c.OrgID, c.CloudAccountID, c.Name, kind, c.Env, c.TokenHash, c.Domain, c.IngressClass, c.SecretStore, ClusterOffline, c.AgentRoleARN, nullString(c.InfraRunID)))
 }
 
 // SetClusterInfraRun enlaza el cluster con el run que lo crea.

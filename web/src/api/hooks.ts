@@ -37,6 +37,7 @@ export const keys = {
   apps: (org: string) => ["org", org, "apps"] as const,
   app: (org: string, app: string) => ["org", org, "apps", app] as const,
   scopes: (org: string, app: string) => ["org", org, "apps", app, "scopes"] as const,
+  scopeSecrets: (org: string, app: string, scope: string) => ["org", org, "apps", app, "scopes", scope, "secrets"] as const,
   deployments: (org: string, app: string, scope: string) =>
     ["org", org, "apps", app, "scopes", scope, "deployments"] as const,
   deployment: (org: string, id: string) => ["org", org, "deployments", id] as const,
@@ -57,6 +58,17 @@ export function useMe(options?: Partial<UseQueryOptions<Me, Error>>) {
     retry: false,
     staleTime: 60_000,
     ...options,
+  });
+}
+
+/** Guarda el idioma preferido (PATCH /me). Actualiza el cache de /me con la respuesta o, si no trae cuerpo, a mano. */
+export function usePatchLocale() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (locale: string) => api.auth.patchMe({ locale }),
+    onSuccess: (me, locale) => {
+      qc.setQueryData<Me>(keys.me, (old) => (me && me.user ? me : old ? { ...old, locale } : old));
+    },
   });
 }
 
@@ -230,6 +242,13 @@ export function useCreateCluster(org: string) {
   });
 }
 
+/** Comando de instalación a pedido (regenera un bootstrap token en cada llamada). */
+export function useInstallCommand(org: string) {
+  return useMutation({
+    mutationFn: (id: string) => api.clusters.installCommand(org, id),
+  });
+}
+
 export function useRotateClusterToken(org: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -336,6 +355,25 @@ export function useRemoveScope(org: string, app: string) {
   return useMutation({
     mutationFn: (scope: string) => api.scopes.remove(org, app, scope),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.scopes(org, app) }),
+  });
+}
+
+// Secretos por scope
+
+export function useScopeSecretKeys(org: string, app: string, scope: string) {
+  return useQuery({
+    queryKey: keys.scopeSecrets(org, app, scope),
+    queryFn: ({ signal }) => api.scopeSecrets.keys(org, app, scope, signal),
+    select: (r) => r.keys ?? [],
+    retry: false,
+  });
+}
+
+export function usePutScopeSecrets(org: string, app: string, scope: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (values: Record<string, string>) => api.scopeSecrets.put(org, app, scope, { values }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.scopeSecrets(org, app, scope) }),
   });
 }
 

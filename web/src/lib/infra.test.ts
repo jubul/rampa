@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
-  formValuesToRequest,
+  buildClusterRequest,
+  costHint,
+  initialInputValues,
   initialLogState,
-  inputsToFormValues,
+  inputKind,
+  inputsToPayload,
   logReducer,
-  parseArns,
+  parseList,
   parseLogEvent,
-  splitClusterModules,
+  sizeInputName,
+  splitModules,
   toneForRun,
   validateClusterForm,
+  visibleInputs,
 } from "./infra";
+import type { InfraModuleInput } from "../api/types";
 
 describe("parseLogEvent", () => {
   it("interpreta line, status y done", () => {
@@ -47,53 +53,107 @@ describe("logReducer", () => {
   });
 });
 
+const doInputs: InfraModuleInput[] = [
+  { name: "region", default: "nyc3", options: ["nyc3", "ams3"] },
+  { name: "size", default: "s-1vcpu-2gb", options: ["s-1vcpu-1gb", "s-1vcpu-2gb"], description: "s-1vcpu-1gb: ~6 USD/mes\ns-1vcpu-2gb: ~12 USD/mes" },
+  { name: "domain", required: true },
+  { name: "ssh_allowed_cidrs", type: "list" },
+  { name: "install_cert_manager", type: "bool", default: false },
+  { name: "disk_gb", type: "number", default: 25 },
+  { name: "api_token", secret: true },
+  { name: "bootstrap_token" },
+  { name: "name" },
+];
+
 describe("inputs de módulo a formulario", () => {
-  it("toma defaults y opciones del módulo", () => {
-    const v = inputsToFormValues([
-      { name: "kubernetes_version", default: "1.33", options: ["1.31", "1.33"] },
-      { name: "ingress_class", default: "traefik" },
-    ]);
-    expect(v.kubernetes_version).toBe("1.33");
-    expect(v.ingress_class).toBe("traefik");
-    expect(v.env).toBe("nonprod");
+  it("clasifica y oculta secretos y campos fijos", () => {
+    expect(visibleInputs(doInputs).map((i) => i.name)).toEqual(["region", "size", "domain", "ssh_allowed_cidrs", "install_cert_manager", "disk_gb"]);
+    expect(inputKind(doInputs[0]!)).toBe("select");
+    expect(inputKind(doInputs[3]!)).toBe("list");
+    expect(inputKind(doInputs[4]!)).toBe("bool");
+    expect(inputKind(doInputs[5]!)).toBe("number");
+    expect(inputKind({ name: "admin_principal_arns" })).toBe("list");
+    expect(inputKind({ name: "domain" })).toBe("text");
   });
-  it("usa la primera opción sin default y fallbacks sin inputs", () => {
-    expect(inputsToFormValues([{ name: "kubernetes_version", options: ["1.31", "1.32"] }]).kubernetes_version).toBe("1.31");
-    const v = inputsToFormValues(undefined);
-    expect(v.kubernetes_version).toBe("1.33");
-    expect(v.ingress_class).toBe("nginx");
+  it("toma defaults y la primera opción sin default", () => {
+    const v = initialInputValues(doInputs);
+    expect(v.region).toBe("nyc3");
+    expect(v.size).toBe("s-1vcpu-2gb");
+    expect(v.install_cert_manager).toBe("false");
+    expect(v.disk_gb).toBe("25");
+    expect(initialInputValues([{ name: "v", options: ["1.31", "1.32"] }]).v).toBe("1.31");
+    expect(initialInputValues(undefined)).toEqual({});
   });
-  it("arma el request con ARNs limpios", () => {
-    const v = { ...inputsToFormValues([]), cloud_account_id: "c1", name: " rampa-nonprod ", domain: " apps.dev.acme.com ", admin_arns: "arn:aws:iam::1:user/a,\n arn:aws:iam::1:user/a\narn:aws:iam::1:user/b" };
-    expect(formValuesToRequest(v)).toEqual({
+  it("arma inputs con tipos y omite opcionales vacíos", () => {
+    const values = { ...initialInputValues(doInputs), domain: " apps.acme.com ", ssh_allowed_cidrs: "10.0.0.0/8,\n10.0.0.0/8\n192.168.0.0/16" };
+    expect(inputsToPayload(doInputs, values)).toEqual({
+      region: "nyc3",
+      size: "s-1vcpu-2gb",
+      domain: "apps.acme.com",
+      ssh_allowed_cidrs: ["10.0.0.0/8", "192.168.0.0/16"],
+      install_cert_manager: false,
+      disk_gb: 25,
+    });
+  });
+  it("el request lleva module e inputs y repite los campos históricos", () => {
+    const inputs: InfraModuleInput[] = [
+      { name: "kubernetes_version", default: "1.33" },
+      { name: "domain" },
+      { name: "ingress_class", default: "nginx" },
+      { name: "admin_principal_arns", type: "list" },
+    ];
+    const values = { ...initialInputValues(inputs), domain: "apps.dev.acme.com", admin_principal_arns: "arn:aws:iam::1:user/a,\n arn:aws:iam::1:user/a\narn:aws:iam::1:user/b" };
+    const req = buildClusterRequest({ cloud_account_id: "c1", name: " rampa-nonprod ", env: "nonprod" }, { module: "aws/eks-cluster", inputs }, values);
+    expect(req).toEqual({
       cloud_account_id: "c1",
       name: "rampa-nonprod",
       env: "nonprod",
+      module: "aws/eks-cluster",
+      inputs: {
+        kubernetes_version: "1.33",
+        domain: "apps.dev.acme.com",
+        ingress_class: "nginx",
+        admin_principal_arns: ["arn:aws:iam::1:user/a", "arn:aws:iam::1:user/b"],
+      },
       kubernetes_version: "1.33",
       domain: "apps.dev.acme.com",
       ingress_class: "nginx",
       admin_principal_arns: ["arn:aws:iam::1:user/a", "arn:aws:iam::1:user/b"],
     });
-    expect(parseArns("")).toEqual([]);
+    expect(parseList("")).toEqual([]);
   });
-  it("valida el formulario", () => {
-    const base = { ...inputsToFormValues([]), cloud_account_id: "c1", name: "rampa-nonprod", domain: "x.com" };
-    expect(validateClusterForm(base)).toEqual({});
-    expect(validateClusterForm({ ...base, name: "Bad Name" }).name).toBeDefined();
-    expect(validateClusterForm({ ...base, admin_arns: "juan" }).admin_arns).toBeDefined();
-    expect(validateClusterForm({ ...base, cloud_account_id: "" }).cloud_account_id).toBeDefined();
+  it("valida cuenta, nombre, requeridos, números y ARNs", () => {
+    const base = { cloud_account_id: "c1", name: "rampa-nonprod", env: "nonprod" as const };
+    const values = { ...initialInputValues(doInputs), domain: "x.com" };
+    expect(validateClusterForm(base, doInputs, values)).toEqual({});
+    expect(validateClusterForm({ ...base, name: "Bad Name" }, doInputs, values).name).toBeDefined();
+    expect(validateClusterForm({ ...base, cloud_account_id: "" }, doInputs, values).cloud_account_id).toBeDefined();
+    expect(validateClusterForm(base, doInputs, { ...values, domain: "" }).domain).toBeDefined();
+    expect(validateClusterForm(base, doInputs, { ...values, disk_gb: "abc" }).disk_gb).toBeDefined();
+    const arns: InfraModuleInput[] = [{ name: "admin_principal_arns", type: "list" }];
+    expect(validateClusterForm(base, arns, { admin_principal_arns: "juan" }).admin_principal_arns).toBeDefined();
+  });
+  it("saca el costo aproximado del tamaño elegido desde la descripción", () => {
+    expect(sizeInputName(doInputs)).toBe("size");
+    expect(costHint({ inputs: doInputs }, { input: "size", value: "s-1vcpu-1gb" })).toBe("s-1vcpu-1gb: ~6 USD/mes");
+    expect(costHint({ inputs: doInputs }, { input: "size", value: "s-1vcpu-2gb" })).toBe("s-1vcpu-2gb: ~12 USD/mes");
+    expect(costHint({ inputs: [{ name: "size" }] }, { input: "size", value: "x" })).toBeNull();
   });
 });
 
 describe("módulos y estados", () => {
-  it("separa disponibles y próximamente", () => {
-    const r = splitClusterModules([
+  it("separa disponibles y próximamente por kind y provider", () => {
+    const items = [
       { provider: "aws", kind: "cluster", available: true },
+      { provider: "aws", kind: "vm", available: true },
       { provider: "gcp", kind: "cluster", available: false },
       { provider: "aws", kind: "db", available: true },
-    ]);
+    ];
+    const r = splitModules(items, "cluster");
     expect(r.available.map((m) => m.provider)).toEqual(["aws"]);
     expect(r.upcoming.map((m) => m.provider)).toEqual(["gcp"]);
+    expect(splitModules(items, "vm", "aws").available).toHaveLength(1);
+    expect(splitModules(items, "vm", "gcp").available).toHaveLength(0);
   });
   it("mapea tonos", () => {
     expect(toneForRun("planning")).toBe("amber");

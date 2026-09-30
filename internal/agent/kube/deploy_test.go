@@ -554,3 +554,77 @@ func setStatus(obj interface{ UnstructuredContent() map[string]any }, status map
 	obj.UnstructuredContent()["status"] = status
 	return nil
 }
+
+func TestDeployRequiresNamespaceMatchingAppScope(t *testing.T) {
+	f := newFixture(t, fixedMapper(), nil)
+	for _, tc := range []struct{ ns, scope string }{
+		{"otro-namespace", "dev"},
+		{testNS, "prod"},
+		{testNS, ""},
+	} {
+		cmd := deployCmd(t, "dep-1", deploymentJSON(1))
+		cmd.Namespace, cmd.Scope = tc.ns, tc.scope
+		if _, err := f.client.Deploy(context.Background(), cmd, nil); err == nil || !strings.Contains(err.Error(), "no coincide con <app>-<scope>") {
+			t.Errorf("ns=%q scope=%q: esperaba rechazo, fue %v", tc.ns, tc.scope, err)
+		}
+	}
+	if len(f.applies) != 0 {
+		t.Errorf("no debería haber aplicado nada: %d", len(f.applies))
+	}
+}
+
+func TestDeployRefusesForeignNamespaces(t *testing.T) {
+	cases := map[string]struct {
+		labels map[string]string
+		want   string
+	}{
+		"otra app":                {map[string]string{LabelApp: "otra-app"}, `pertenece a la app "otra-app"`},
+		"sin label ni managed-by": {nil, "no lo creó Rampa"},
+		"managed-by de otro":      {map[string]string{LabelManagedBy: "helm"}, "no lo creó Rampa"},
+	}
+	for name, tc := range cases {
+		f := newFixture(t, fixedMapper(), []runtime.Object{namespaceObj(testNS, tc.labels)})
+		_, err := f.client.Deploy(context.Background(), deployCmd(t, "dep-1", deploymentJSON(1)), nil)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: esperaba %q, fue %v", name, tc.want, err)
+		}
+		ns, gerr := f.get(t, gvkNamespace, "", testNS)
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if got := ns.GetLabels()[LabelApp]; got != tc.labels[LabelApp] {
+			t.Errorf("%s: se pisó la label app: %q", name, got)
+		}
+		if len(f.applies) != 0 {
+			t.Errorf("%s: no debería aplicar nada", name)
+		}
+	}
+}
+
+func TestDeployAdoptsNamespaceCreatedByRampa(t *testing.T) {
+	f := newFixture(t, fixedMapper(), []runtime.Object{namespaceObj(testNS, map[string]string{LabelManagedBy: ManagedByValue})})
+	if err := f.dyn.Tracker().Add(*healthyDeployment("dep-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.client.Deploy(context.Background(), deployCmd(t, "dep-1", deploymentJSON(1)), f.report); err != nil {
+		t.Fatal(err)
+	}
+	ns, _ := f.get(t, gvkNamespace, "", testNS)
+	if ns.GetLabels()[LabelApp] != testApp {
+		t.Errorf("labels: %v", ns.GetLabels())
+	}
+}
+
+func TestDeployCreatedNamespaceIsMarkedManagedByRampa(t *testing.T) {
+	f := newFixture(t, fixedMapper(), nil)
+	if err := f.dyn.Tracker().Add(*healthyDeployment("dep-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.client.Deploy(context.Background(), deployCmd(t, "dep-1", deploymentJSON(1)), f.report); err != nil {
+		t.Fatal(err)
+	}
+	ns, _ := f.get(t, gvkNamespace, "", testNS)
+	if ns.GetLabels()[LabelManagedBy] != ManagedByValue {
+		t.Errorf("labels: %v", ns.GetLabels())
+	}
+}

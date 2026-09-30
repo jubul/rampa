@@ -1,11 +1,15 @@
 @import "tailwindcss";
 
+/* Modo oscuro por clase: <html class="dark"> (ver src/theme y el script de index.html). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Paleta: neutros slate más un acento verde. Tipografía del sistema. */
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --color-accent-50: #f0fdf4;
   --color-accent-100: #dcfce7;
+  --color-accent-400: #4ade80;
   --color-accent-500: #22c55e;
   --color-accent-600: #16a34a;
   --color-accent-700: #15803d;
@@ -18,10 +22,10 @@ body,
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
 }
 
 /* Foco visible y consistente en todo control. */
 :focus-visible {
-  @apply outline-none ring-2 ring-accent-500/60 ring-offset-1 ring-offset-white;
+  @apply outline-none ring-2 ring-accent-500/60 ring-offset-1 ring-offset-white dark:ring-offset-slate-900;
 }

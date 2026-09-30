@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { RequireAuth } from "./auth/AuthContext";
 import { AppLayout } from "./layout/AppLayout";
@@ -62,5 +63,9 @@ const router = createBrowserRouter([
 ]);
 
 export function App() {
-  return <RouterProvider router={router} />;
+  // Los textos que salen de helpers (estados, validaciones, fechas) no se
+  // suscriben al idioma: al cambiarlo remontamos el árbol para que todo se
+  // vuelva a renderizar con el idioma nuevo.
+  const { i18n } = useTranslation();
+  return <RouterProvider key={i18n.resolvedLanguage ?? i18n.language} router={router} />;
 }

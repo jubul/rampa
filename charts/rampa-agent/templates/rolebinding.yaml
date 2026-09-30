@@ -1,0 +1,17 @@
+{{- if and .Values.rbac.create .Values.cluster.bootstrapToken }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rampa-agent.fullname" . }}-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rampa-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rampa-agent.fullname" . }}-token
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rampa-agent.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

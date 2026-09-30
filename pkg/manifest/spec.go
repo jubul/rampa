@@ -32,6 +32,7 @@ type ApplicationSpec struct {
 // en el manifest. "pr" es la plantilla de los scopes efímeros.
 type SpecScope struct {
 	Name        string       `json:"name"`
+	Compute     string       `json:"compute"`
 	Size        string       `json:"size"`
 	Replicas    int          `json:"replicas"`
 	Strategy    string       `json:"strategy"`
@@ -120,6 +121,7 @@ func FromSpec(spec ApplicationSpec) (*Application, error) {
 			as = &cp
 		}
 		app.Spec.Scopes[sc.Name] = Scope{
+			Compute:     sc.Compute,
 			Size:        sc.Size,
 			Replicas:    sc.Replicas,
 			Strategy:    sc.Strategy,
@@ -199,7 +201,7 @@ func ToSpec(app *Application) ApplicationSpec {
 			as = &cp
 		}
 		spec.Scopes = append(spec.Scopes, SpecScope{
-			Name: name, Size: sc.Size, Replicas: sc.Replicas, Strategy: sc.Strategy,
+			Name: name, Compute: sc.Compute, Size: sc.Size, Replicas: sc.Replicas, Strategy: sc.Strategy,
 			Domain: sc.Domain, Autoscaling: as, TTL: sc.TTL,
 		})
 	}

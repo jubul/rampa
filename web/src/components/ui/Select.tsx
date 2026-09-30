@@ -21,7 +21,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
     <div className={cn("relative", className)}>
       <select
         ref={ref}
-        className="h-9 w-full appearance-none rounded-md border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
+        className="h-9 w-full appearance-none rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-3 pr-8 text-sm text-slate-900 dark:text-slate-100 disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-500 dark:disabled:text-slate-400"
         {...rest}
       >
         {placeholder !== undefined && (
@@ -35,7 +35,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           </option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-slate-500" aria-hidden />
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-slate-500 dark:text-slate-400" aria-hidden />
     </div>
   );
 });

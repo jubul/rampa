@@ -26,6 +26,9 @@ import (
 // ErrUnauthorized lo devuelve Backend.Authenticate cuando el token no vale.
 var ErrUnauthorized = errors.New("token de cluster inválido")
 
+// ErrOffline lo devuelve Send cuando el cluster no tiene una conexión viva.
+var ErrOffline = errors.New("el agente del cluster no está conectado")
+
 // Agent identifica la conexión de un agente: su cluster y su organización.
 // Todo lo que el agente reporta se aplica solo a este cluster.
 type Agent struct {
@@ -135,6 +138,30 @@ func (h *Hub) Notify(clusterID string) {
 	case c.wake <- struct{}{}:
 	default:
 	}
+}
+
+// Send manda un comando por la conexión viva del cluster, sin pasar por la
+// cola durable. Es para comandos que solo tienen sentido en vivo y cuyo payload
+// no debe persistirse completo (write_secret: los valores viajan una sola vez).
+// El llamador registra la fila de agent_commands por su cuenta; el ack y el
+// result vuelven por el camino normal. Devuelve ErrOffline si no hay conexión.
+func (h *Hub) Send(clusterID string, cmd protocol.Command) error {
+	h.mu.Lock()
+	c := h.conns[clusterID]
+	h.mu.Unlock()
+	if c == nil {
+		return ErrOffline
+	}
+	if err := h.send(c, protocol.KindCommand, cmd.ID, cmd); err != nil {
+		return fmt.Errorf("mandando el comando %s: %w", cmd.ID, err)
+	}
+	sentCtx, cancel := opCtx(c.ctx)
+	defer cancel()
+	if err := h.backend.CommandSent(sentCtx, c.agent, cmd.ID); err != nil {
+		h.log.Error("marcando comando como enviado", "cluster_id", clusterID, "command_id", cmd.ID, "err", err)
+	}
+	h.log.Info("comando enviado en vivo", "cluster_id", clusterID, "command_id", cmd.ID, "kind", cmd.Kind)
+	return nil
 }
 
 // Disconnect corta la conexión viva del cluster, si hay, con

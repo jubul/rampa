@@ -3,8 +3,8 @@
 // corren los pods. Kubernetes es el runtime común, así que el resto de Rampa
 // no sabe en qué nube está.
 //
-// Las implementaciones viven en subpaquetes (aws, gcp, azure) y se registran
-// con Register en su init. La API las busca con Get.
+// Las implementaciones viven en subpaquetes (aws, gcp, azure, digitalocean,
+// oci, ovh) y se registran con Register en su init. La API las busca con Get.
 package provider
 
 import (
@@ -18,18 +18,60 @@ import (
 type Kind string
 
 const (
-	AWS   Kind = "aws"
-	GCP   Kind = "gcp"
-	Azure Kind = "azure"
+	AWS          Kind = "aws"
+	GCP          Kind = "gcp"
+	Azure        Kind = "azure"
+	DigitalOcean Kind = "digitalocean"
+	OCI          Kind = "oci"
+	OVH          Kind = "ovh"
 )
+
+// AuthKind dice cómo se conecta una cuenta: por federación de identidad (sin
+// secretos de larga duración) o con un token de API del cliente que la API
+// guarda cifrado (ADR 0004).
+type AuthKind string
+
+const (
+	AuthFederated AuthKind = "federated"
+	AuthToken     AuthKind = "token"
+)
+
+// LocalizedTerm es un término en los dos idiomas de la plataforma.
+type LocalizedTerm struct {
+	ES string `json:"es"`
+	EN string `json:"en"`
+}
+
+// Terminology son los nombres que usa cada nube para sus conceptos. La web
+// los usa en todos sus textos: en DigitalOcean dice Droplet y DOKS, en Azure
+// máquina virtual y AKS.
+type Terminology struct {
+	Account     LocalizedTerm `json:"account"`
+	Project     LocalizedTerm `json:"project"`
+	Cluster     LocalizedTerm `json:"cluster"`
+	VM          LocalizedTerm `json:"vm"`
+	Registry    LocalizedTerm `json:"registry"`
+	SecretStore LocalizedTerm `json:"secret_store"`
+	Region      LocalizedTerm `json:"region"`
+}
+
+// Terms devuelve los términos en orden fijo, para recorrerlos (tests, listados).
+func (t Terminology) Terms() map[string]LocalizedTerm {
+	return map[string]LocalizedTerm{
+		"account": t.Account, "project": t.Project, "cluster": t.Cluster, "vm": t.VM,
+		"registry": t.Registry, "secret_store": t.SecretStore, "region": t.Region,
+	}
+}
 
 // ErrNotImplemented lo devuelven las nubes que todavía no están implementadas
 // o las operaciones que una nube no soporta.
 var ErrNotImplemented = errors.New("no implementado para este provider")
 
-// CloudAccount es una cuenta de nube conectada a una organización. Nunca
-// contiene credenciales de larga duración: solo lo necesario para asumir una
-// identidad por federación.
+// CloudAccount es una cuenta de nube conectada a una organización. Para las
+// nubes federadas nunca contiene credenciales de larga duración: solo lo
+// necesario para asumir una identidad. Para las nubes con auth token, la API
+// carga Credentials en memoria desde el cifrado justo antes de llamar a Verify
+// o a Credentials; nunca se serializa ni se persiste en texto plano.
 type CloudAccount struct {
 	ID    string `json:"id"`
 	OrgID string `json:"org_id"`
@@ -45,7 +87,11 @@ type CloudAccount struct {
 	//   aws:   external_id
 	//   gcp:   workload_identity_provider, service_account_email
 	//   azure: tenant_id, client_id
+	//   digitalocean: registry_name
 	Settings map[string]string `json:"settings"`
+	// Credentials son los campos marcados Field.Secret (por ejemplo api_token),
+	// descifrados. Solo viven en memoria durante una llamada al provider.
+	Credentials map[string]string `json:"-"`
 }
 
 // ClusterInfo es lo que el provider necesita saber de un cluster.
@@ -71,6 +117,9 @@ type Field struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	Help        string `json:"help,omitempty"`
 	Required    bool   `json:"required"`
+	// Secret marca un campo que la API cifra (cloud_accounts.credentials_ciphertext)
+	// y nunca devuelve. Va a CloudAccount.Credentials, no a Settings.
+	Secret bool `json:"secret"`
 }
 
 // Instructions es lo que se le muestra al cliente para conectar su cuenta.
@@ -109,6 +158,11 @@ type Provider interface {
 	// Available dice si la implementación está completa. Las que no lo están
 	// igual se listan en la web como "próximamente".
 	Available() bool
+	// Auth dice si la cuenta se conecta por federación o con un token del cliente.
+	Auth() AuthKind
+	// Terminology son los nombres que usa esta nube para cuenta, cluster, VM,
+	// registry, gestor de secretos y región, en español e inglés.
+	Terminology() Terminology
 	// ConnectInstructions arma lo que el cliente tiene que hacer para conectar
 	// una cuenta a partir de lo que la API ya sabe de ella (ConnectRequest).
 	ConnectInstructions(req ConnectRequest) Instructions

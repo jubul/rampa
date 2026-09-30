@@ -171,3 +171,93 @@ func byName(ps []Parameter) map[string]Parameter {
 	}
 	return m
 }
+
+func TestScopeCompute(t *testing.T) {
+	app, err := Parse([]byte(`
+apiVersion: rampa.dev/v1
+kind: Application
+metadata: {name: a, team: b}
+spec:
+  type: api
+  scopes:
+    dev: {}
+    prod: {compute: serverless, size: M}
+    pr: {compute: serverless}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := app.Validate(); len(errs) > 0 {
+		t.Fatalf("debería validar: %v", errs)
+	}
+	// Default kubernetes; lo declarado se respeta; los efímeros heredan el de pr.
+	if app.Spec.Scopes["dev"].Compute != ComputeKubernetes || app.Spec.Scopes["prod"].Compute != ComputeServerless {
+		t.Errorf("compute: %+v", app.Spec.Scopes)
+	}
+	pr, eph, err := app.ResolveScope("pr-12")
+	if err != nil || !eph || pr.Compute != ComputeServerless {
+		t.Errorf("pr-12 debería heredar serverless de pr: %+v %v %v", pr, eph, err)
+	}
+	// Un valor desconocido falla con el nombre del campo.
+	bad, _ := Parse([]byte(`
+apiVersion: rampa.dev/v1
+kind: Application
+metadata: {name: a, team: b}
+spec:
+  type: api
+  scopes:
+    dev: {compute: lambda}
+`))
+	found := false
+	for _, e := range bad.Validate() {
+		if strings.Contains(e.Error(), "spec.scopes.dev.compute \"lambda\"") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("compute inválido debería reportarse: %v", bad.Validate())
+	}
+	// El manifest generado conserva compute y vuelve igual.
+	raw, err := MarshalManifest(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "compute: serverless") {
+		t.Errorf("el manifest generado no lleva compute:\n%s", raw)
+	}
+	again, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Spec.Scopes["prod"].Compute != ComputeServerless || again.Spec.Scopes["dev"].Compute != ComputeKubernetes {
+		t.Errorf("round trip: %+v", again.Spec.Scopes)
+	}
+	// Y el spec estructurado también.
+	spec := ToSpec(app)
+	for _, sc := range spec.Scopes {
+		want := ComputeKubernetes
+		if sc.Name == "prod" || sc.Name == "pr" {
+			want = ComputeServerless
+		}
+		if sc.Compute != want {
+			t.Errorf("ToSpec %s: compute %q", sc.Name, sc.Compute)
+		}
+	}
+	rebuilt, err := FromSpec(spec)
+	if err != nil || rebuilt.Spec.Scopes["prod"].Compute != ComputeServerless {
+		t.Errorf("FromSpec: %v %+v", err, rebuilt.Spec.Scopes)
+	}
+}
+
+func TestValidateParameterName(t *testing.T) {
+	for _, ok := range []string{"API_KEY", "A", "LOG_LEVEL2", "X_1_Y"} {
+		if err := ValidateParameterName(ok); err != nil {
+			t.Errorf("%q debería ser válido: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "lower", "1ABC", "API-KEY", "API KEY", "PORT", "RAMPA_X"} {
+		if err := ValidateParameterName(bad); err == nil {
+			t.Errorf("%q debería ser inválido", bad)
+		}
+	}
+}

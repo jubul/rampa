@@ -14,6 +14,7 @@ import (
 
 	"rampa.dev/internal/api/store"
 	"rampa.dev/pkg/provider"
+	_ "rampa.dev/pkg/provider/digitalocean"
 )
 
 // Credenciales falsas: los tests verifican que nunca lleguen al log.
@@ -150,8 +151,9 @@ func (e *runnerEnv) createCluster(name string) (*store.InfraRun, *store.Cluster)
 	e.f.t.Helper()
 	run, cl, err := e.svc.CreateClusterRun(context.Background(), ClusterRequest{
 		OrgID: e.f.orgID, RequestedBy: e.f.user.ID, Account: e.f.acc, Name: name, Env: "nonprod", Domain: "apps.dev.acme.com",
-		IngressClass: "nginx", SecretStore: "aws-secrets-manager", KubernetesVersion: "1.33", AdminPrincipalARNs: []string{"arn:aws:iam::123456789012:user/juan"},
-		Actor: store.Actor{Type: "user", ID: e.f.user.ID, Name: "Infra"},
+		IngressClass: "nginx", SecretStore: "aws-secrets-manager",
+		Inputs: map[string]any{"kubernetes_version": "1.33", "admin_principal_arns": []string{"arn:aws:iam::123456789012:user/juan"}},
+		Actor:  store.Actor{Type: "user", ID: e.f.user.ID, Name: "Infra"},
 	})
 	if err != nil {
 		e.f.t.Fatal(err)
@@ -169,11 +171,17 @@ func TestRunnerApplyThenDestroy(t *testing.T) {
 	}
 	var inputs map[string]any
 	_ = json.Unmarshal(run.Inputs, &inputs)
-	if inputs["api_url"] != "http://api.test.local" || inputs["agent_image_repository"] != "ghcr.io/acme/rampa-agent" || inputs["agent_image_tag"] != "9.9" || inputs["region"] != "us-east-1" || inputs["install_agent"] != true {
+	if inputs["api_url"] != "http://api.test.local" || inputs["agent_image_repository"] != "ghcr.io/acme/rampa-agent" || inputs["agent_image_tag"] != "9.9" || inputs["region"] != "us-east-1" || inputs["install_agent"] != true || inputs["agent_chart_url"] != "http://api.test.local/public/charts/rampa-agent.tgz" || inputs["vpc_cidr"] != DefaultVPCCIDR {
 		t.Errorf("inputs: %v", inputs)
 	}
 	if _, has := inputs["agent_token"]; has || strings.Contains(string(run.Inputs), "rampa_cluster_") {
 		t.Errorf("inputs no debe llevar el token: %s", run.Inputs)
+	}
+	if _, has := inputs["bootstrap_token"]; has || strings.Contains(string(run.Inputs), "rampa_bootstrap_") {
+		t.Errorf("inputs no debe llevar el bootstrap token: %s", run.Inputs)
+	}
+	if cl.Kind != store.ClusterKindKubernetes || cl.SecretStore != "aws-secrets-manager" {
+		t.Errorf("cluster: %+v", cl)
 	}
 	tokenBefore := cl.TokenHash
 
@@ -213,10 +221,18 @@ func TestRunnerApplyThenDestroy(t *testing.T) {
 			t.Errorf("falta %q en el log:\n%s", want, log)
 		}
 	}
-	for _, secret := range []string{fakeAccessKey, fakeSecret, fakeSession, "rampa_cluster_", "rampa_state_"} {
+	for _, secret := range []string{fakeAccessKey, fakeSecret, fakeSession, "rampa_cluster_", "rampa_state_", "rampa_bootstrap_"} {
 		if strings.Contains(log, secret) {
 			t.Errorf("el log contiene %q:\n%s", secret, log)
 		}
+	}
+	if !strings.Contains(log, "bootstrap_token presente: si") || !strings.Contains(log, "bootstrap token del agente generado") {
+		t.Errorf("el módulo debería recibir TF_VAR_bootstrap_token:\n%s", log)
+	}
+	// Quedó un bootstrap token sin usar para el cluster, con vencimiento a 2 horas.
+	bts, err := e.f.st.ListBootstrapTokens(ctx, e.f.orgID, cl.ID)
+	if err != nil || len(bts) != 1 || bts[0].UsedAt != nil || time.Until(bts[0].ExpiresAt) < 90*time.Minute {
+		t.Errorf("bootstrap tokens: %v %+v", err, bts)
 	}
 	if strings.Contains(log, "no-deberia-salir") {
 		t.Error("los outputs no van al log")
@@ -402,12 +418,125 @@ func TestRunnerCredentialsProviderMissing(t *testing.T) {
 	}
 }
 
+// TestRunnerDigitalOceanVM: un módulo vm de DigitalOcean con el provider real
+// de digitalocean como CredentialsProvider. El token de la cuenta sale del
+// cifrado, llega al subproceso como DIGITALOCEAN_TOKEN y nunca al log; no se
+// exportan credenciales de AWS; el cluster queda kind vm con secret_store
+// kubernetes y los outputs de la VM (public_ip, ssh_hint, dns_hint) se guardan.
+func TestRunnerDigitalOceanVM(t *testing.T) {
+	const doToken = "dop_v1_0123456789abcdefFAKE"
+	e := newRunnerEnv(t)
+	e.svc.SetCredentialsFunc(e.svc.providerCredentials)
+	acc := e.f.tokenAccount("acme-do", "digitalocean", testKey(3), map[string]string{"api_token": doToken}, map[string]string{"registry_name": "acme"})
+	if !acc.HasCredentials {
+		t.Fatalf("la cuenta debería tener credenciales: %+v", acc)
+	}
+	ctx := context.Background()
+	run, cl, err := e.svc.CreateClusterRun(ctx, ClusterRequest{
+		OrgID: e.f.orgID, RequestedBy: e.f.user.ID, Account: acc, Module: "digitalocean/droplet-k3s", Name: "do-nonprod", Env: "nonprod",
+		Domain: "apps.dev.acme.com", IngressClass: "traefik",
+		Inputs: map[string]any{"size": "s-2vcpu-4gb", "admin_cidrs": []any{"203.0.113.0/24"}, "registry_name": "acme"},
+		Actor:  store.Actor{Type: "user", ID: e.f.user.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Kind != store.InfraKindVM || run.Module != "digitalocean/droplet-k3s" || run.Provider != "digitalocean" {
+		t.Fatalf("run: %+v", run)
+	}
+	if cl.Kind != store.ClusterKindVM || cl.SecretStore != store.SecretStoreKubernetes || cl.Domain != "apps.dev.acme.com" {
+		t.Fatalf("cluster: %+v", cl)
+	}
+	var inputs map[string]any
+	_ = json.Unmarshal(run.Inputs, &inputs)
+	if inputs["region"] != "nyc3" || inputs["size"] != "s-2vcpu-4gb" || inputs["image"] != "ubuntu-24-04-x64" || inputs["domain"] != "apps.dev.acme.com" || inputs["registry_name"] != "acme" || inputs["agent_chart_url"] != "http://api.test.local/public/charts/rampa-agent.tgz" {
+		t.Errorf("inputs: %v", inputs)
+	}
+	for _, bad := range []string{"agent_chart_path", "install_agent", "agent_token", "bootstrap_token", "api_token"} {
+		if _, has := inputs[bad]; has {
+			t.Errorf("inputs no debería tener %s: %v", bad, inputs)
+		}
+	}
+	if strings.Contains(string(run.Inputs), doToken) {
+		t.Fatal("el token de la cuenta no puede estar en los inputs")
+	}
+	// Un módulo de otro provider o inputs inválidos se rechazan antes de crear nada.
+	if _, _, err := e.svc.CreateClusterRun(ctx, ClusterRequest{OrgID: e.f.orgID, Account: acc, Module: "aws/ec2-k3s", Name: "x", Env: "nonprod", Domain: "d"}); err == nil {
+		t.Error("un módulo de aws con una cuenta de digitalocean debería fallar")
+	}
+	if _, _, err := e.svc.CreateClusterRun(ctx, ClusterRequest{OrgID: e.f.orgID, Account: acc, Module: "digitalocean/droplet-k3s", Name: "y", Env: "nonprod", Domain: "d", Inputs: map[string]any{"size": "enorme"}}); err == nil {
+		t.Error("un size fuera de las opciones debería fallar")
+	}
+
+	e.startWorker()
+	done := e.waitStatus(run.ID, store.InfraRunSucceeded)
+	if done.Error != "" {
+		t.Fatalf("run: %+v", done)
+	}
+	var outputs map[string]json.RawMessage
+	if err := json.Unmarshal(done.Outputs, &outputs); err != nil {
+		t.Fatal(err)
+	}
+	var ip, ssh string
+	_ = json.Unmarshal(outputs["public_ip"], &ip)
+	_ = json.Unmarshal(outputs["ssh_hint"], &ssh)
+	if ip != "203.0.113.10" || !strings.Contains(ssh, "ssh root@203.0.113.10") {
+		t.Errorf("outputs: %s", done.Outputs)
+	}
+	if _, has := outputs["dns_hint"]; !has {
+		t.Errorf("falta dns_hint: %s", done.Outputs)
+	}
+	if _, leaked := outputs["secreto"]; leaked {
+		t.Error("un output sensible no debe guardarse")
+	}
+	log := e.logText(run.ID)
+	for _, want := range []string{"módulo: digitalocean/droplet-k3s", "bootstrap_token presente: si", "credenciales presentes: DIGITALOCEAN_TOKEN=si AWS_ACCESS_KEY_ID=no TF_VAR_agent_token=no", "agent_chart_url", "rampa-agent.tgz", "token de larga duración", "digitalocean_droplet.this: Creating", "== rampa: apply completo =="} {
+		if !strings.Contains(log, want) {
+			t.Errorf("falta %q en el log:\n%s", want, log)
+		}
+	}
+	for _, secret := range []string{doToken, "rampa_bootstrap_", "rampa_cluster_", "rampa_state_"} {
+		if strings.Contains(log, secret) {
+			t.Errorf("el log contiene %q:\n%s", secret, log)
+		}
+	}
+	clAfter, err := e.f.st.GetCluster(ctx, e.f.orgID, cl.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sin agent_token en el módulo el token del cluster no se rota acá: lo
+	// genera el canje del bootstrap. Sigue offline hasta que el agente conecte.
+	if clAfter.Status != store.ClusterOffline || clAfter.TokenHash != cl.TokenHash || clAfter.Kind != store.ClusterKindVM {
+		t.Errorf("cluster tras el apply: %+v", clAfter)
+	}
+	bts, err := e.f.st.ListBootstrapTokens(ctx, e.f.orgID, cl.ID)
+	if err != nil || len(bts) != 1 || bts[0].UsedAt != nil {
+		t.Errorf("bootstrap tokens: %v %+v", err, bts)
+	}
+	// Los eventos persistidos no llevan el token.
+	evs, _ := e.f.st.ListEvents(ctx, e.f.orgID, store.EventFilter{Limit: 500})
+	for _, ev := range evs {
+		if strings.Contains(string(ev.Payload), doToken) || strings.Contains(ev.Message, doToken) {
+			t.Fatal("un evento contiene el token")
+		}
+	}
+	// Sin la clave de cifrado, el run falla con un mensaje claro en vez de correr sin credenciales.
+	e.svc.cipher = nil
+	if _, err := e.svc.providerAccount(ctx, acc); err == nil || !strings.Contains(err.Error(), "RAMPA_STATE_KEY") {
+		t.Errorf("sin cipher debería fallar: %v", err)
+	}
+}
+
 // noCredsProvider es un provider aws sin CredentialsProvider.
 type noCredsProvider struct{}
 
 func (noCredsProvider) Kind() provider.Kind { return provider.AWS }
 func (noCredsProvider) DisplayName() string { return "AWS sin credenciales" }
 func (noCredsProvider) Available() bool     { return true }
+func (noCredsProvider) Auth() provider.AuthKind {
+	return provider.AuthFederated
+}
+func (noCredsProvider) Terminology() provider.Terminology { return provider.Terminology{} }
 func (noCredsProvider) ConnectInstructions(provider.ConnectRequest) provider.Instructions {
 	return provider.Instructions{}
 }
@@ -456,7 +585,7 @@ func TestClaimOnePerCloudAccount(t *testing.T) {
 	r1, _ := e.createCluster("uno")
 	r2, _ := e.createCluster("dos")
 	otherAcc := e.f.connectedAccount("acme-aws-2")
-	r3, _, err := e.svc.CreateClusterRun(ctx, ClusterRequest{OrgID: e.f.orgID, Account: otherAcc, Name: "tres", Env: "prod", Domain: "apps.acme.com", IngressClass: "nginx", SecretStore: "aws-secrets-manager"})
+	r3, _, err := e.svc.CreateClusterRun(ctx, ClusterRequest{OrgID: e.f.orgID, Account: otherAcc, Name: "tres", Env: "prod", Domain: "apps.acme.com", IngressClass: "nginx"})
 	if err != nil {
 		t.Fatal(err)
 	}

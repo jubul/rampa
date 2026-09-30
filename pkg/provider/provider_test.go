@@ -14,6 +14,8 @@ type fake struct {
 func (f fake) Kind() Kind                                      { return f.kind }
 func (f fake) DisplayName() string                             { return "Fake " + string(f.kind) }
 func (f fake) Available() bool                                 { return f.available }
+func (f fake) Auth() AuthKind                                  { return AuthFederated }
+func (f fake) Terminology() Terminology                        { return Terminology{} }
 func (f fake) ConnectInstructions(ConnectRequest) Instructions { return Instructions{Title: "fake"} }
 func (f fake) Verify(context.Context, CloudAccount) (Verification, error) {
 	return Verification{OK: f.available}, nil

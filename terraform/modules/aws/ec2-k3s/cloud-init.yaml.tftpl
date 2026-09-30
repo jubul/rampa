@@ -1,0 +1,140 @@
+#cloud-config
+# Rampa: instala k3s (un nodo, secretos cifrados en reposo) y el agente de Rampa.
+# El token que viaja aca es un bootstrap token de un solo uso que vence en 2 horas;
+# el agente lo canjea por el token real y lo guarda en un Secret del cluster.
+# Los pods no pueden llegar al metadata del proveedor (169.254.169.254): lo bloquea
+# rampa-imds-guard con iptables. El agente (y External Secrets, si se instala) corre
+# con la red del host para poder usar la identidad de la maquina.
+package_update: true
+package_upgrade: true
+ssh_pwauth: false
+packages:
+  - curl
+  - ca-certificates
+  - unattended-upgrades
+  - iptables
+
+write_files:
+  - path: /etc/rancher/k3s/config.yaml
+    permissions: "0600"
+    content: |
+      secrets-encryption: true
+      write-kubeconfig-mode: "0600"
+      cluster-cidr: "${pod_cidr}"
+      service-cidr: "10.43.0.0/16"
+      tls-san:
+        - "${public_ip}"
+      kube-apiserver-arg:
+        - "audit-log-maxage=7"
+%{ if registries_yaml != "" ~}
+  - path: /etc/rancher/k3s/registries.yaml
+    permissions: "0600"
+    content: |
+      ${indent(6, registries_yaml)}
+%{ endif ~}
+  - path: /opt/rampa/agent-values.yaml
+    permissions: "0600"
+    content: |
+      api:
+        url: "${api_url}"
+      cluster:
+        bootstrapToken: "${bootstrap_token}"
+      hostNetwork: ${agent_host_network}
+%{ if agent_image_repository != "" ~}
+      image:
+        repository: "${agent_image_repository}"
+%{ if agent_image_tag != "" ~}
+        tag: "${agent_image_tag}"
+%{ endif ~}
+%{ endif ~}
+%{ if secret_store_values != "" ~}
+      ${indent(6, secret_store_values)}
+%{ endif ~}
+  - path: /etc/ssh/sshd_config.d/00-rampa.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+  - path: /opt/rampa/imds-guard.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Bloquea el metadata del proveedor desde la red de pods. Idempotente.
+      set -u
+      for dst in 169.254.169.254; do
+        iptables -C FORWARD -s "${pod_cidr}" -d "$dst" -j DROP 2>/dev/null || iptables -I FORWARD 1 -s "${pod_cidr}" -d "$dst" -j DROP
+      done
+  - path: /etc/systemd/system/rampa-imds-guard.service
+    content: |
+      [Unit]
+      Description=Rampa: bloquear el metadata del proveedor desde los pods
+      Before=k3s.service
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/rampa/imds-guard.sh
+      RemainAfterExit=yes
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/rampa-imds-guard.timer
+    content: |
+      [Unit]
+      Description=Rampa: reafirmar el bloqueo del metadata cada 5 minutos
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=5min
+      [Install]
+      WantedBy=timers.target
+  - path: /opt/rampa/install.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      trap 'shred -u /opt/rampa/agent-values.yaml 2>/dev/null || true' EXIT
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      arch="$(dpkg --print-architecture)"
+      case "$arch" in amd64) helm_sha="${helm_sha256_amd64}";; arm64) helm_sha="${helm_sha256_arm64}";; *) echo "arquitectura $arch no soportada"; exit 1;; esac
+      case "${agent_chart_url}" in https://*) ;; *) echo "AVISO: agent_chart_url no es https; el chart viaja sin proteccion de integridad";; esac
+
+      systemctl daemon-reload
+      systemctl enable --now rampa-imds-guard.service rampa-imds-guard.timer
+
+      # k3s: instalador y binario de una version fija. El instalador verifica el sha256 del binario.
+      curl -sfL "https://raw.githubusercontent.com/k3s-io/k3s/${k3s_version_url}/install.sh" -o /tmp/k3s-install.sh
+      INSTALL_K3S_VERSION="${k3s_version}" INSTALL_K3S_SKIP_START=false sh /tmp/k3s-install.sh server
+      for i in $(seq 1 120); do kubectl get nodes >/dev/null 2>&1 && break; sleep 5; done
+      for i in $(seq 1 120); do kubectl -n kube-system rollout status deploy/traefik --timeout=30s >/dev/null 2>&1 && break; sleep 5; done
+
+      # helm: tarball con version fija y checksum verificado.
+      curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-v${helm_version}-linux-$arch.tar.gz"
+      echo "$helm_sha  /tmp/helm.tgz" | sha256sum -c -
+      tar -xzf /tmp/helm.tgz -C /tmp && install -m 0755 /tmp/linux-$arch/helm /usr/local/bin/helm
+%{ if tls_email != "" ~}
+      helm repo add jetstack https://charts.jetstack.io >/dev/null
+      helm upgrade --install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --version "${cert_manager_version}" --set crds.enabled=true --wait --timeout 10m
+      cat <<'ISSUER' | kubectl apply -f -
+      apiVersion: cert-manager.io/v1
+      kind: ClusterIssuer
+      metadata:
+        name: letsencrypt
+      spec:
+        acme:
+          server: https://acme-v02.api.letsencrypt.org/directory
+          email: ${tls_email}
+          privateKeySecretRef:
+            name: letsencrypt-account
+          solvers:
+            - http01:
+                ingress:
+                  class: traefik
+      ISSUER
+%{ endif ~}
+%{ if install_eso ~}
+      helm repo add external-secrets https://charts.external-secrets.io >/dev/null
+      helm upgrade --install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace --version "${eso_chart_version}" --set installCRDs=true --set hostNetwork=true --wait --timeout 10m
+%{ endif ~}
+      helm upgrade --install rampa-agent "${agent_chart_url}" -n rampa-system --create-namespace -f /opt/rampa/agent-values.yaml --wait --timeout 10m
+      echo "rampa: agente instalado" > /opt/rampa/done
+
+runcmd:
+  - [ systemctl, restart, ssh ]
+  - [ bash, -c, "/opt/rampa/install.sh > /var/log/rampa-install.log 2>&1" ]

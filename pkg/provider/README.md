@@ -4,11 +4,20 @@ Lo que difiere entre nubes, detrás de una interfaz. El resto de Rampa (API, age
 
 Los subpaquetes se registran solos en su `init`; la API los importa (`_ "rampa.dev/pkg/provider/aws"`, etc.) y los busca con `provider.Get` o los lista con `provider.All`.
 
-| Provider | `Available` | Conexión | Registry | Secretos | Identidad de pods |
-|---|---|---|---|---|---|
-| `aws` | sí | rol IAM con external ID (CloudFormation quick-create) | ECR `<cuenta>.dkr.ecr.<región>.amazonaws.com` | Secrets Manager vía ESO con IRSA | `eks.amazonaws.com/role-arn` |
-| `gcp` | no | Workload Identity Federation hacia nuestro issuer | Artifact Registry `<región>-docker.pkg.dev/<proyecto>` | Secret Manager vía ESO (`gcpsm`) | `iam.gke.io/gcp-service-account` |
-| `azure` | no | App registration con credencial federada | ACR `<acr_name>.azurecr.io` | Key Vault vía ESO (`azurekv`) | `azure.workload.identity/client-id` |
+| Provider | `Available` | `Auth` | Conexión | Registry | Secretos | Identidad de pods |
+|---|---|---|---|---|---|---|
+| `aws` | sí | federated | rol IAM con external ID (CloudFormation quick-create) | ECR `<cuenta>.dkr.ecr.<región>.amazonaws.com` | Secrets Manager vía ESO con IRSA | `eks.amazonaws.com/role-arn` |
+| `gcp` | no | federated | Workload Identity Federation hacia nuestro issuer | Artifact Registry `<región>-docker.pkg.dev/<proyecto>` | Secret Manager vía ESO (`gcpsm`) | `iam.gke.io/gcp-service-account` |
+| `azure` | no | federated | App registration con credencial federada | ACR `<acr_name>.azurecr.io` | Key Vault vía ESO (`azurekv`) | `azure.workload.identity/client-id` |
+| `digitalocean` | sí | token | token de API con alcance mínimo (campo secreto `api_token`, cifrado por la API) | DOCR `registry.digitalocean.com/<registry_name>` | ninguno: `secret_store` `kubernetes`, el agente escribe Secrets | ninguna |
+| `oci` | no | token | clave de API (par RSA) de un usuario de IAM (`private_key` secreto) | OCIR `<región>.ocir.io/<namespace>` | OCI Vault vía ESO (`oracle`) | ninguna (workload identity de OKE por políticas) |
+| `ovh` | no | token | application key, application secret y consumer key (los dos últimos secretos) | Managed Private Registry (`registry_url`) | ninguno: `secret_store` `kubernetes` | ninguna |
+
+Además de lo anterior, todo `Provider` expone `Auth()` (`federated` o `token`, ADR 0004) y `Terminology()`: los nombres de cuenta, proyecto, cluster, VM, registry, gestor de secretos y región en español e inglés (`LocalizedTerm{ES, EN}`), que la API devuelve en `GET /providers` y la web usa en sus textos. `Field.Secret` marca los campos que la API cifra y nunca devuelve; van a `CloudAccount.Credentials` (nunca serializado), que la API llena en memoria justo antes de `Verify` o de `CredentialsProvider.Credentials`.
+
+## DigitalOcean (`pkg/provider/digitalocean`)
+
+`New(Config{BaseURL, HTTPClient})` permite apuntar la API a un `httptest.Server` en los tests. `Verify` llama `GET /v2/account` con `Bearer <api_token>` (timeout 15 s): sin token devuelve error (no se pudo intentar); un 401/403 devuelve `Verification{OK: false}` con el motivo; con 200 la identidad es el email (o el uuid) de la cuenta. `Registry` arma `registry.digitalocean.com/<settings.registry_name>` y falla con un mensaje claro si falta. `SecretStoreSpec` devuelve `Name: "kubernetes"` con objeto vacío: DigitalOcean no tiene gestor de secretos y el agente mantiene el Secret `<app>-params`. `Credentials` (para el runner de OpenTofu) devuelve `Env{"DIGITALOCEAN_TOKEN": token}` con `Expires` en cero porque el token es de larga duración.
 
 ## AWS (`pkg/provider/aws`)
 

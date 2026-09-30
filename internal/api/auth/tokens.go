@@ -12,6 +12,9 @@ import (
 const (
 	APITokenPrefix     = "rampa_"
 	ClusterTokenPrefix = "rampa_cluster_"
+	// BootstrapTokenPrefix identifica los tokens de bootstrap de un solo uso con
+	// los que se instala el agente (ADR 0004): se canjean por el token del cluster.
+	BootstrapTokenPrefix = "rampa_bootstrap_"
 )
 
 const tokenRandomBytes = 32
@@ -24,6 +27,11 @@ func NewAPIToken() (plain, hash string, err error) {
 // NewClusterToken genera un token "rampa_cluster_<random>" y devuelve el texto plano y su hash.
 func NewClusterToken() (plain, hash string, err error) {
 	return newToken(ClusterTokenPrefix)
+}
+
+// NewBootstrapToken genera un token "rampa_bootstrap_<random>" y devuelve el texto plano y su hash.
+func NewBootstrapToken() (plain, hash string, err error) {
+	return newToken(BootstrapTokenPrefix)
 }
 
 func newToken(prefix string) (string, string, error) {
@@ -46,9 +54,14 @@ func IsClusterToken(plain string) bool {
 	return strings.HasPrefix(plain, ClusterTokenPrefix)
 }
 
-// IsAPIToken dice si el texto tiene forma de token de API (y no de cluster).
+// IsBootstrapToken dice si el texto tiene forma de token de bootstrap.
+func IsBootstrapToken(plain string) bool {
+	return strings.HasPrefix(plain, BootstrapTokenPrefix)
+}
+
+// IsAPIToken dice si el texto tiene forma de token de API (y no de cluster ni de bootstrap).
 func IsAPIToken(plain string) bool {
-	return strings.HasPrefix(plain, APITokenPrefix) && !IsClusterToken(plain)
+	return strings.HasPrefix(plain, APITokenPrefix) && !IsClusterToken(plain) && !IsBootstrapToken(plain)
 }
 
 // BearerToken extrae el token de un header Authorization: Bearer <token>.

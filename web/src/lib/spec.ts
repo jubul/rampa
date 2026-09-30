@@ -1,6 +1,7 @@
 // Lógica pura del wizard de aplicaciones: spec por defecto, validaciones,
 // normalización antes de enviar y agrupación de errores por paso.
 
+import i18n from "../i18n";
 import type {
   ApplicationSpec,
   SpecParameter,
@@ -11,29 +12,23 @@ import type {
 export const SCOPE_ORDER = ["dev", "staging", "prod", "pr"] as const;
 export const PERMANENT_SCOPES = ["dev", "staging", "prod"] as const;
 
+// Rangos de request a limit; se muestran con el separador "–" en ambos idiomas.
 export const SIZES = [
-  { value: "S", cpu: "100m a 500m", memory: "128Mi a 512Mi" },
-  { value: "M", cpu: "250m a 1000m", memory: "256Mi a 1Gi" },
-  { value: "L", cpu: "500m a 2000m", memory: "512Mi a 2Gi" },
-  { value: "XL", cpu: "1000m a 4000m", memory: "1Gi a 4Gi" },
+  { value: "S", cpu: "100m - 500m", memory: "128Mi - 512Mi" },
+  { value: "M", cpu: "250m - 1000m", memory: "256Mi - 1Gi" },
+  { value: "L", cpu: "500m - 2000m", memory: "512Mi - 2Gi" },
+  { value: "XL", cpu: "1000m - 4000m", memory: "1Gi - 4Gi" },
 ] as const;
 
-export const APP_TYPES = [
-  { value: "api", label: "API", help: "Servicio HTTP con puerto y healthcheck." },
-  { value: "worker", label: "Worker", help: "Proceso en segundo plano, sin tráfico entrante." },
-  { value: "cron", label: "Cron", help: "Tarea programada que corre según un schedule." },
-  { value: "static", label: "Static", help: "Sitio estático servido en un puerto." },
-] as const;
+/** Los textos de cada tipo salen del catálogo: appTypes.<value>.label y .help. */
+export const APP_TYPES = [{ value: "api" }, { value: "worker" }, { value: "cron" }, { value: "static" }] as const;
 
 export const RUNTIMES = ["go", "node", "python", "static"] as const;
 export const STRATEGIES = ["rolling", "canary", "bluegreen"] as const;
 export const SERVICE_TYPES = ["postgres", "redis", "sqs", "s3", "dynamodb"] as const;
 
-export const TIERS = [
-  { value: 1, label: "1 crítico", help: "Si se cae, se cae el negocio. Alertas de guardia y más cuidado en cada cambio." },
-  { value: 2, label: "2 importante", help: "Afecta a usuarios o equipos, pero tolera una degradación corta." },
-  { value: 3, label: "3 interno", help: "Herramienta interna o experimento. Sin urgencia si falla." },
-] as const;
+/** Los textos de cada tier salen del catálogo: tiers.<value>.label y .help. */
+export const TIERS = [{ value: 1 }, { value: 2 }, { value: 3 }] as const;
 
 const NAME_MAX = 40;
 const NAME_RE = /^[a-z]([a-z0-9-]*[a-z0-9])?$/;
@@ -44,19 +39,20 @@ const NAME_RE = /^[a-z]([a-z0-9-]*[a-z0-9])?$/;
  * tiene la última palabra; esto solo da feedback en vivo.
  */
 export function validateAppName(name: string): string | null {
-  if (name === "") return "El nombre es obligatorio";
-  if (name.length > NAME_MAX) return `Máximo ${NAME_MAX} caracteres`;
-  if (!/^[a-z]/.test(name)) return "Tiene que empezar con una letra minúscula";
-  if (!/[a-z0-9]$/.test(name)) return "No puede terminar con guion";
-  if (!NAME_RE.test(name)) return "Solo minúsculas, dígitos y guiones";
+  const t = i18n.t.bind(i18n);
+  if (name === "") return t("validation.nameRequired");
+  if (name.length > NAME_MAX) return t("validation.maxChars", { max: NAME_MAX });
+  if (!/^[a-z]/.test(name)) return t("validation.startLower");
+  if (!/[a-z0-9]$/.test(name)) return t("validation.noTrailingDash");
+  if (!NAME_RE.test(name)) return t("validation.lowerDigitsDash");
   return null;
 }
 
 const PARAM_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 export function validateParamName(name: string): string | null {
-  if (name === "") return "El nombre es obligatorio";
-  if (!PARAM_NAME_RE.test(name)) return "MAYUSCULAS, dígitos y guion bajo; empieza con letra";
+  if (name === "") return i18n.t("validation.nameRequired");
+  if (!PARAM_NAME_RE.test(name)) return i18n.t("validation.upperDigitsUnderscore");
   return null;
 }
 
@@ -133,12 +129,17 @@ export function normalizeSpec(spec: ApplicationSpec): ApplicationSpec {
     port: hasPort(spec.type) ? spec.port : 0,
     healthcheck: spec.type === "api" ? spec.healthcheck.trim() : "",
     schedule: spec.type === "cron" ? spec.schedule.trim() : "",
-    scopes: spec.scopes.map((s) => ({
-      ...s,
-      domain: s.name === "prod" ? s.domain.trim() : "",
-      ttl: s.name === "pr" ? s.ttl.trim() : "",
-      autoscaling: s.autoscaling ? { ...s.autoscaling } : null,
-    })),
+    scopes: spec.scopes.map((s) => {
+      // compute solo viaja si no es el default (kubernetes).
+      const { compute, ...rest } = s;
+      return {
+        ...rest,
+        ...(compute === "serverless" ? { compute } : {}),
+        domain: s.name === "prod" ? s.domain.trim() : "",
+        ttl: s.name === "pr" ? s.ttl.trim() : "",
+        autoscaling: s.autoscaling ? { ...s.autoscaling } : null,
+      };
+    }),
     parameters: spec.parameters
       .filter((p) => p.name.trim() !== "")
       .map((p): SpecParameter => {
@@ -155,12 +156,13 @@ export function normalizeSpec(spec: ApplicationSpec): ApplicationSpec {
 
 export type WizardStep = "basics" | "scopes" | "parameters" | "services" | "review";
 
-export const WIZARD_STEPS: { key: WizardStep; label: string }[] = [
-  { key: "basics", label: "Básicos" },
-  { key: "scopes", label: "Scopes" },
-  { key: "parameters", label: "Parameters" },
-  { key: "services", label: "Services" },
-  { key: "review", label: "Revisión" },
+/** Las etiquetas salen del catálogo: wizard.steps.<key>. */
+export const WIZARD_STEPS: { key: WizardStep }[] = [
+  { key: "basics" },
+  { key: "scopes" },
+  { key: "parameters" },
+  { key: "services" },
+  { key: "review" },
 ];
 
 /** Asocia un mensaje de validación de la API (por ejemplo "spec.scopes.prod.size ...") al paso que lo corrige. */
@@ -182,15 +184,15 @@ export function groupDetailsByStep(details: string[]): Record<WizardStep, string
 export function localErrors(spec: ApplicationSpec): Record<WizardStep, string[]> {
   const out: Record<WizardStep, string[]> = { basics: [], scopes: [], parameters: [], services: [], review: [] };
   const nameErr = validateAppName(spec.name);
-  if (nameErr) out.basics.push(`Nombre: ${nameErr}`);
-  if (spec.team.trim() === "") out.basics.push("Equipo: es obligatorio");
-  if (spec.type === "cron" && spec.schedule.trim() === "") out.basics.push("Schedule: es obligatorio para un cron");
-  if (spec.scopes.length === 0) out.scopes.push("Elegí al menos un scope");
+  if (nameErr) out.basics.push(i18n.t("validation.fieldName", { error: nameErr }));
+  if (spec.team.trim() === "") out.basics.push(i18n.t("validation.teamRequired"));
+  if (spec.type === "cron" && spec.schedule.trim() === "") out.basics.push(i18n.t("validation.scheduleRequired"));
+  if (spec.scopes.length === 0) out.scopes.push(i18n.t("validation.pickScope"));
   for (const p of spec.parameters) {
     if (p.name.trim() === "") continue;
     const e = validateParamName(p.name.trim());
     if (e) out.parameters.push(`${p.name}: ${e}`);
-    if (p.source === "service" && (p.service ?? "") === "") out.parameters.push(`${p.name}: elegí un service`);
+    if (p.source === "service" && (p.service ?? "") === "") out.parameters.push(i18n.t("validation.pickService", { name: p.name }));
   }
   return out;
 }

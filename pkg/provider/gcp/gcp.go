@@ -54,6 +54,22 @@ func (p *Provider) DisplayName() string { return "Google Cloud" }
 // Available implementa provider.Provider. GCP llega en la Fase C.
 func (p *Provider) Available() bool { return false }
 
+// Auth implementa provider.Provider: Workload Identity Federation, sin claves.
+func (p *Provider) Auth() provider.AuthKind { return provider.AuthFederated }
+
+// Terminology implementa provider.Provider con los nombres de Google Cloud.
+func (p *Provider) Terminology() provider.Terminology {
+	return provider.Terminology{
+		Account:     provider.LocalizedTerm{ES: "cuenta de Google Cloud", EN: "Google Cloud account"},
+		Project:     provider.LocalizedTerm{ES: "proyecto", EN: "project"},
+		Cluster:     provider.LocalizedTerm{ES: "cluster GKE", EN: "GKE cluster"},
+		VM:          provider.LocalizedTerm{ES: "instancia de Compute Engine", EN: "Compute Engine instance"},
+		Registry:    provider.LocalizedTerm{ES: "Artifact Registry", EN: "Artifact Registry"},
+		SecretStore: provider.LocalizedTerm{ES: "Secret Manager", EN: "Secret Manager"},
+		Region:      provider.LocalizedTerm{ES: "región", EN: "region"},
+	}
+}
+
 // ConnectInstructions describe la conexión por Workload Identity Federation:
 // un pool con un provider OIDC que confía en el issuer de Rampa, y una service
 // account que el plano de control impersona.
