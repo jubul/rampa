@@ -453,28 +453,30 @@ func (s *Service) execute(parent context.Context, run *store.InfraRun) {
 	}
 	s.emitStatus(bg, run, actor)
 
+	locale := s.localeFor(bg, run.RequestedBy)
 	lg, err := newRunLogger(bg, s, run)
 	if err != nil {
-		s.finish(bg, run, actor, store.InfraRunFailed, "no pude abrir el log del run: "+err.Error(), nil)
+		s.finish(bg, run, actor, store.InfraRunFailed, tr(locale, "no pude abrir el log del run: ", "could not open the run log: ")+err.Error(), nil)
 		return
 	}
+	lg.locale = locale
 	lg.red.add(stateToken)
-	lg.line(fmt.Sprintf("== rampa: tofu %s de %s (intento %d) ==", run.Operation, run.Module, run.Attempt))
+	lg.line(fmt.Sprintf(tr(locale, "== rampa: tofu %s de %s (intento %d) ==", "== rampa: tofu %s for %s (attempt %d) =="), run.Operation, run.Module, run.Attempt))
 
 	outputs, runErr := s.steps(ctx, run, stateToken, lg, actor)
 	switch {
 	case runErr == nil && run.Operation == store.InfraOpDestroy:
-		lg.line("== rampa: destroy completo ==")
+		lg.line(tr(locale, "== rampa: destroy completo ==", "== rampa: destroy complete =="))
 		s.finish(bg, run, actor, store.InfraRunDestroyed, "", nil)
 	case runErr == nil:
-		lg.line("== rampa: apply completo ==")
+		lg.line(tr(locale, "== rampa: apply completo ==", "== rampa: apply complete =="))
 		s.finish(bg, run, actor, store.InfraRunSucceeded, "", outputs)
 	default:
 		msg := lg.red.redact(runErr.Error())
 		if parent.Err() != nil {
-			msg = StoppedMessage
+			msg = tr(locale, StoppedMessage, "the API stopped during the run")
 		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			msg = fmt.Sprintf("el run superó el tiempo máximo (%s)", s.cfg.Timeout)
+			msg = fmt.Sprintf(tr(locale, "el run superó el tiempo máximo (%s)", "the run exceeded the maximum time (%s)"), s.cfg.Timeout)
 		}
 		lg.line("== rampa: error: " + msg + " ==")
 		s.finish(bg, run, actor, store.InfraRunFailed, msg, nil)
@@ -531,12 +533,12 @@ func (s *Service) steps(ctx context.Context, run *store.InfraRun, stateToken str
 	s.mu.RUnlock()
 	creds, err := credsFn(provider.WithRunID(ctx, run.ID), pacc)
 	if err != nil {
-		return nil, fmt.Errorf("obteniendo credenciales de la cuenta %s: %w", acc.Name, err)
+		return nil, fmt.Errorf(tr(lg.locale, "obteniendo credenciales de la cuenta %s: %w", "getting credentials for account %s: %w"), acc.Name, err)
 	}
 	if creds.Expires.IsZero() {
-		lg.line(fmt.Sprintf("credenciales de la cuenta %s cargadas (token de larga duración, cifrado en Rampa)", acc.Name))
+		lg.line(fmt.Sprintf(tr(lg.locale, "credenciales de la cuenta %s cargadas (token de larga duración, cifrado en Rampa)", "credentials for account %s loaded (long-lived token, encrypted in Rampa)"), acc.Name))
 	} else {
-		lg.line(fmt.Sprintf("credenciales temporales obtenidas para la cuenta %s (vencen %s)", acc.Name, creds.Expires.UTC().Format(time.RFC3339)))
+		lg.line(fmt.Sprintf(tr(lg.locale, "credenciales temporales obtenidas para la cuenta %s (vencen %s)", "temporary credentials obtained for account %s (expire %s)"), acc.Name, creds.Expires.UTC().Format(time.RFC3339)))
 	}
 
 	// Los valores secretos que el subproceso podría imprimir no llegan al log.
@@ -702,10 +704,10 @@ func (s *Service) runTofu(ctx context.Context, dir string, env []string, lg *run
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		msg := fmt.Sprintf("tofu %s falló", args[0])
+		msg := fmt.Sprintf(tr(lg.locale, "tofu %s falló", "tofu %s failed"), args[0])
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			msg += fmt.Sprintf(" (código %d)", exitErr.ExitCode())
+			msg += fmt.Sprintf(tr(lg.locale, " (código %d)", " (exit code %d)"), exitErr.ExitCode())
 		} else {
 			msg += ": " + err.Error()
 		}
@@ -713,7 +715,7 @@ func (s *Service) runTofu(ctx context.Context, dir string, env []string, lg *run
 			msg += ": " + t
 		}
 		if looksLikeAccessDenied(tail.String()) {
-			msg += ". Parece un problema de permisos en la cuenta: actualizá el stack RampaConnect con ManageInfrastructure=true"
+			msg += tr(lg.locale, ". Parece un problema de permisos en la cuenta: actualizá el stack RampaConnect con ManageInfrastructure=true", ". It looks like a permissions problem in the account: update the RampaConnect stack with ManageInfrastructure=true")
 		}
 		return errors.New(msg)
 	}
@@ -857,11 +859,12 @@ func (s *Service) emitStatus(ctx context.Context, run *store.InfraRun, actor sto
 
 // runLogger numera las líneas del log, las persiste y las emite en vivo.
 type runLogger struct {
-	ctx context.Context
-	s   *Service
-	run *store.InfraRun
-	mu  sync.Mutex
-	seq int
+	locale string
+	ctx    context.Context
+	s      *Service
+	run    *store.InfraRun
+	mu     sync.Mutex
+	seq    int
 	// red oculta los secretos conocidos del run en cada línea.
 	red redactor
 }
@@ -990,4 +993,26 @@ func SslipDomain(ip string) string {
 		return ""
 	}
 	return strings.ReplaceAll(parsed.To4().String(), ".", "-") + ".sslip.io"
+}
+
+// tr elige el texto según el idioma del usuario que pidió el run. Los mensajes
+// del runner se escriben una sola vez en el log y en el error del run, así que
+// no pueden localizarse por request: van en el idioma de quien lo pidió.
+func tr(locale, es, en string) string {
+	if locale == "en" {
+		return en
+	}
+	return es
+}
+
+// localeFor devuelve el idioma del usuario (es por defecto).
+func (s *Service) localeFor(ctx context.Context, userID string) string {
+	if userID == "" {
+		return "es"
+	}
+	u, err := s.st.GetUser(ctx, userID)
+	if err != nil || u == nil || u.Locale != "en" {
+		return "es"
+	}
+	return "en"
 }

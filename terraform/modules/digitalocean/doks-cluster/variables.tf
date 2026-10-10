@@ -13,6 +13,7 @@ variable "env" {
     condition     = contains(["nonprod", "prod"], var.env)
     error_message = "env debe ser nonprod o prod."
   }
+  nullable = false
 }
 
 variable "region" {
@@ -23,11 +24,13 @@ variable "kubernetes_version" {
   description = "Slug de versión de DOKS (vacío = la última disponible)."
   type        = string
   default     = ""
+  nullable    = false
 }
 
 variable "node_size" {
-  type    = string
-  default = "s-2vcpu-4gb"
+  type     = string
+  default  = "s-2vcpu-4gb"
+  nullable = false
 }
 
 variable "node_count" {
@@ -37,12 +40,14 @@ variable "node_count" {
     condition     = var.node_count >= 1 && var.node_count <= 20
     error_message = "Entre 1 y 20 nodos."
   }
+  nullable = false
 }
 
 variable "registry_name" {
   description = "DOCR a crear o usar e integrar al cluster (pull sin credenciales)."
   type        = string
   default     = ""
+  nullable    = false
 }
 
 variable "api_url" {
@@ -59,16 +64,19 @@ variable "agent_chart_url" {
 }
 
 variable "agent_image_repository" {
-  type    = string
-  default = ""
+  type     = string
+  default  = ""
+  nullable = false
 }
 
 variable "agent_image_tag" {
-  type    = string
-  default = ""
+  type     = string
+  default  = ""
+  nullable = false
 }
 
 variable "tags" {
-  type    = list(string)
-  default = []
+  type     = list(string)
+  default  = []
+  nullable = false
 }
