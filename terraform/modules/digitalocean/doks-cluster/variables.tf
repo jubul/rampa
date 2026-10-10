@@ -56,7 +56,9 @@ variable "api_url" {
 
 variable "bootstrap_token" {
   type      = string
+  default   = ""
   sensitive = true
+  nullable  = false
 }
 
 variable "agent_chart_url" {

@@ -95,7 +95,9 @@ variable "api_url" {
 variable "bootstrap_token" {
   description = "Bootstrap token de un solo uso generado por Rampa."
   type        = string
+  default     = ""
   sensitive   = true
+  nullable    = false
 }
 
 variable "agent_chart_url" {
