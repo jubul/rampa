@@ -172,8 +172,8 @@ func TestRootModule(t *testing.T) {
 		"variable \"bootstrap_token\" {\n  type = string\n  default = \"\"\n  sensitive = true\n}",
 		"variable \"admin_principal_arns\" {\n  type = list(string)\n  default = []\n}",
 		"variable \"tags\" {\n  type = map(string)\n  default = {}\n}",
-		"  agent_chart_path = var.agent_chart_path\n",
-		"  agent_token = var.agent_token\n",
+		"  agent_chart_path = var.agent_chart_path != \"\" ? var.agent_chart_path : null\n",
+		"  agent_token = var.agent_token != \"\" ? var.agent_token : null\n",
 		"output \"agent_role_arn\" {\n  value = module.cluster.agent_role_arn\n}",
 		`source  = "hashicorp/helm"`,
 	} {
@@ -186,7 +186,7 @@ func TestRootModule(t *testing.T) {
 		t.Errorf("region debería aparecer solo en el provider:\n%s", tf)
 	}
 	// Al módulo solo se le pasan las variables que declara.
-	if strings.Contains(tf, "  bootstrap_token = var.bootstrap_token\n") != ModuleDeclaresVariable(m, "bootstrap_token") {
+	if strings.Contains(tf, "  bootstrap_token = var.bootstrap_token != \"\" ? var.bootstrap_token : null\n") != ModuleDeclaresVariable(m, "bootstrap_token") {
 		t.Errorf("bootstrap_token se pasa al módulo solo si lo declara:\n%s", tf)
 	}
 
@@ -201,9 +201,9 @@ func TestRootModule(t *testing.T) {
 		`source = "./modules/digitalocean/droplet-k3s"`,
 		"module \"vm\" {",
 		"  region = var.region\n",
-		"  bootstrap_token = var.bootstrap_token\n",
-		"  agent_chart_url = var.agent_chart_url\n",
-		"  domain = var.domain\n",
+		"  bootstrap_token = var.bootstrap_token != \"\" ? var.bootstrap_token : null\n",
+		"  agent_chart_url = var.agent_chart_url != \"\" ? var.agent_chart_url : null\n",
+		"  domain = var.domain != \"\" ? var.domain : null\n",
 		"variable \"tags\" {\n  type = list(string)\n  default = []\n}",
 		"output \"public_ip\" {\n  value = module.vm.public_ip\n}",
 	} {
@@ -219,7 +219,7 @@ func TestRootModule(t *testing.T) {
 	// aws/ec2-k3s: la región va al provider y el módulo no la declara.
 	ec2, _ := FindModuleByPath("aws/ec2-k3s")
 	tf = RootModule(ec2)
-	if strings.Count(tf, "region = var.region") != 1 || !strings.Contains(tf, "  volume_size_gb = var.volume_size_gb\n") || !strings.Contains(tf, "  domain = var.domain\n") {
+	if strings.Count(tf, "region = var.region") != 1 || !strings.Contains(tf, "  volume_size_gb = var.volume_size_gb\n") || !strings.Contains(tf, "  domain = var.domain != \"\" ? var.domain : null\n") {
 		t.Errorf("root module de ec2-k3s:\n%s", tf)
 	}
 	// Si hay tofu en el PATH, el archivo tiene que ser HCL válido (fmt falla con sintaxis rota).
@@ -287,6 +287,24 @@ func TestNewNotReady(t *testing.T) {
 // módulo embebido y chart) de cada módulo disponible y lo valida con tofu init
 // y tofu validate, que es lo que va a correr el runner. Necesita tofu en el
 // PATH y red para bajar los providers la primera vez; RAMPA_TEST_SKIP_TOFU_INIT=1 lo salta.
+// TestRootModuleOptionalStringsAsNull: un input de texto vacío no debe pisar el
+// default del módulo (k3s_version fijada en el módulo rechaza "").
+func TestRootModuleOptionalStringsAsNull(t *testing.T) {
+	for _, path := range []string{"digitalocean/droplet-k3s", "aws/ec2-k3s"} {
+		m, ok := FindModuleByPath(path)
+		if !ok {
+			t.Fatalf("no encuentro %s", path)
+		}
+		tf := RootModule(m)
+		if !strings.Contains(tf, "  k3s_version = var.k3s_version != \"\" ? var.k3s_version : null\n") {
+			t.Errorf("%s: k3s_version vacío debería pasarse como null:\n%s", path, tf)
+		}
+		if strings.Contains(tf, "  name = var.name != ") {
+			t.Errorf("%s: name es requerido y no debería tener el condicional", path)
+		}
+	}
+}
+
 func TestRootModuleValidatesWithTofu(t *testing.T) {
 	tofu, err := exec.LookPath("tofu")
 	if err != nil {

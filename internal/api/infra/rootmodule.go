@@ -70,6 +70,12 @@ func RootModule(m Module) string {
 		if !declared[v.Name] {
 			continue
 		}
+		// Un string opcional vacío se pasa como null: así el módulo aplica su
+		// propio default (por ejemplo la versión fija de k3s) en vez de recibir "".
+		if v.Type == "string" && v.Default == `""` {
+			fmt.Fprintf(&b, "  %s = var.%s != \"\" ? var.%s : null\n", v.Name, v.Name, v.Name)
+			continue
+		}
 		fmt.Fprintf(&b, "  %s = var.%s\n", v.Name, v.Name)
 	}
 	b.WriteString("}\n")
