@@ -131,7 +131,7 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Image = strings.TrimSpace(body.Image)
-	if err := requireString("image", body.Image); err != nil {
+	if err := requireString(r, "image", body.Image); err != nil {
 		a.fail(w, r, err, "")
 		return
 	}

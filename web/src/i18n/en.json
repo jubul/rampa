@@ -95,7 +95,9 @@
     "teamRequired": "Team: required",
     "scheduleRequired": "Schedule: required for a cron",
     "pickScope": "Pick at least one scope",
-    "pickService": "{{name}}: pick a service"
+    "pickService": "{{name}}: pick a service",
+    "domainRequired": "A managed cluster needs a domain.",
+    "domainFormat": "Use a lowercase DNS name, for example apps.dev.acme.com."
   },
   "events": {
     "empty": "No events yet"
@@ -491,7 +493,13 @@
     "modules": "Modules",
     "available": "Available",
     "comingSoon": "Coming soon",
-    "noModules": "No modules of this kind are available yet."
+    "noModules": "No modules of this kind are available yet.",
+    "domain": "Domain for scopes",
+    "domainHelpVm": "Optional. Leave it empty and Rampa uses <ip>.sslip.io, which resolves on its own and gives you working URLs with no DNS setup. With your own domain, point the wildcard *.domain at the machine's IP (automatic if you set a DNS zone below).",
+    "domainHelpCluster": "Apps are published at <app>-<scope>.<domain>. Point the wildcard record *.domain at the cluster's ingress.",
+    "ingressClass": "Ingress class",
+    "ingressHelpVm": "k3s ships with Traefik: keep traefik unless you install another ingress controller.",
+    "ingressHelpCluster": "Must match the ingress controller installed in the cluster (nginx, alb, traefik)."
   },
   "infraRun": {
     "loading": "Loading run",

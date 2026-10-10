@@ -162,3 +162,24 @@ describe("módulos y estados", () => {
     expect(toneForRun("destroyed")).toBe("gray");
   });
 });
+
+describe("domain e ingress_class en el formulario de cluster", () => {
+  const mod = { module: "digitalocean/droplet-k3s", inputs: [{ name: "size", type: "string", required: true }] };
+  it("un cluster administrado exige dominio; una máquina no", () => {
+    const base = { cloud_account_id: "a", name: "rampa-vm", env: "nonprod" as const };
+    expect(validateClusterForm({ ...base, kind: "cluster" }, mod.inputs, { size: "s" }).domain).toBeTruthy();
+    expect(validateClusterForm({ ...base, kind: "vm" }, mod.inputs, { size: "s" }).domain).toBeUndefined();
+  });
+  it("valida el formato del dominio cuando viene", () => {
+    const base = { cloud_account_id: "a", name: "rampa-vm", env: "nonprod" as const, kind: "vm" as const };
+    expect(validateClusterForm({ ...base, domain: "no es un dominio" }, mod.inputs, { size: "s" }).domain).toBeTruthy();
+    expect(validateClusterForm({ ...base, domain: "Apps.Dev.Acme.com" }, mod.inputs, { size: "s" }).domain).toBeUndefined();
+  });
+  it("manda domain e ingress_class al nivel raíz, en minúsculas, y los omite si están vacíos", () => {
+    const req = buildClusterRequest({ cloud_account_id: "a", name: "x", env: "nonprod", kind: "vm", domain: " Apps.Acme.com ", ingress_class: "traefik" }, mod, { size: "s" });
+    expect(req.domain).toBe("apps.acme.com");
+    expect(req.ingress_class).toBe("traefik");
+    const empty = buildClusterRequest({ cloud_account_id: "a", name: "x", env: "nonprod", kind: "vm" }, mod, { size: "s" });
+    expect(empty.domain).toBeUndefined();
+  });
+});

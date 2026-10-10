@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -152,9 +151,17 @@ func orgCtx(r *http.Request) *auth.OrgContext {
 }
 
 // requireString valida un campo obligatorio.
-func requireString(name, value string) error {
+func requireString(r *http.Request, name, value string) error {
 	if strings.TrimSpace(value) == "" {
-		return invalid(fmt.Sprintf("%s es requerido", name))
+		return invalid(loc(r, name+" es requerido", name+" is required"))
 	}
 	return nil
+}
+
+// loc elige el mensaje según el idioma del request (auth.Locale: es por defecto).
+func loc(r *http.Request, es, en string) string {
+	if r != nil && auth.Locale(r.Context()) == "en" {
+		return en
+	}
+	return es
 }

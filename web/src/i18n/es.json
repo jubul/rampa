@@ -95,7 +95,9 @@
     "teamRequired": "Equipo: es obligatorio",
     "scheduleRequired": "Schedule: es obligatorio para un cron",
     "pickScope": "Elegí al menos un scope",
-    "pickService": "{{name}}: elegí un service"
+    "pickService": "{{name}}: elegí un service",
+    "domainRequired": "Un cluster administrado necesita un dominio.",
+    "domainFormat": "Usá un nombre DNS en minúsculas, por ejemplo apps.dev.acme.com."
   },
   "events": {
     "empty": "Todavía no hay eventos"
@@ -491,7 +493,13 @@
     "modules": "Módulos",
     "available": "Disponible",
     "comingSoon": "Próximamente",
-    "noModules": "Ningún módulo de este tipo está disponible todavía."
+    "noModules": "Ningún módulo de este tipo está disponible todavía.",
+    "domain": "Dominio de los scopes",
+    "domainHelpVm": "Opcional. Si lo dejás vacío, Rampa usa <ip>.sslip.io, que resuelve solo y te da URLs que funcionan sin configurar DNS. Con dominio propio, apuntá el comodín *.dominio a la IP de la máquina (automático si abajo indicás una zona DNS).",
+    "domainHelpCluster": "Las apps se publican en <app>-<scope>.<dominio>. Apuntá el registro comodín *.dominio al ingress del cluster.",
+    "ingressClass": "Clase de ingress",
+    "ingressHelpVm": "k3s trae Traefik instalado: dejá traefik salvo que instales otro ingress controller.",
+    "ingressHelpCluster": "Tiene que coincidir con el ingress controller instalado en el cluster (nginx, alb, traefik)."
   },
   "infraRun": {
     "loading": "Cargando la ejecución",

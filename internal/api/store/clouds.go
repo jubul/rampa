@@ -166,6 +166,17 @@ func (s *Store) SetClusterInfraResult(ctx context.Context, orgID, id, agentRoleA
 	return translate(err)
 }
 
+// SetClusterDomain fija el dominio de un cluster solo si todavía no tiene uno.
+// Lo usa el runner para las máquinas creadas sin dominio (<ip>.sslip.io).
+func (s *Store) SetClusterDomain(ctx context.Context, orgID, id, domain string) (bool, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE clusters SET domain = $3, updated_at = now()
+		WHERE org_id = $1 AND id = $2 AND coalesce(domain, '') = ''`, orgID, id, domain)
+	if err != nil {
+		return false, translate(err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // GetCluster busca un cluster de la org.
 func (s *Store) GetCluster(ctx context.Context, orgID, id string) (*Cluster, error) {
 	return scanCluster(s.db.QueryRow(ctx, `SELECT `+clusterColumns+` FROM clusters WHERE org_id = $1 AND id = $2`, orgID, id))

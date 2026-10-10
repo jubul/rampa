@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -795,9 +796,26 @@ func (s *Service) afterSuccess(ctx context.Context, run *store.InfraRun, actor s
 		s.log.Error("actualizando el cluster tras el apply", "cluster_id", run.ClusterID, "err", err)
 		return
 	}
-	s.bus.Emit(ctx, run.OrgID, actor, "cluster.infra_ready", "cluster", run.ClusterID,
-		fmt.Sprintf("la infraestructura del cluster %s está lista; el agente se está conectando", run.Name),
-		map[string]any{"run_id": run.ID, "name": run.Name, "agent_role_arn": roleARN, "kind": run.Kind})
+	// Una máquina creada sin dominio recibe <ip>.sslip.io: resuelve solo a esa IP
+	// y da URLs que funcionan sin configurar DNS. Solo si el cluster no tenía dominio.
+	var domain string
+	if raw, ok := outputs["public_ip"]; ok {
+		var ip string
+		_ = json.Unmarshal(raw, &ip)
+		if d := SslipDomain(ip); d != "" {
+			if set, err := s.st.SetClusterDomain(ctx, run.OrgID, run.ClusterID, d); err != nil {
+				s.log.Error("fijando el dominio sslip del cluster", "cluster_id", run.ClusterID, "err", err)
+			} else if set {
+				domain = d
+			}
+		}
+	}
+	msg := fmt.Sprintf("la infraestructura del cluster %s está lista; el agente se está conectando", run.Name)
+	if domain != "" {
+		msg += fmt.Sprintf("; las apps van a publicarse en *.%s", domain)
+	}
+	s.bus.Emit(ctx, run.OrgID, actor, "cluster.infra_ready", "cluster", run.ClusterID, msg,
+		map[string]any{"run_id": run.ID, "name": run.Name, "agent_role_arn": roleARN, "kind": run.Kind, "domain": domain})
 }
 
 func (s *Service) afterFailure(ctx context.Context, run *store.InfraRun, actor store.Actor) {
@@ -961,4 +979,15 @@ func splitImage(image string) (repo, tag string) {
 		return image, ""
 	}
 	return image[:i], image[i+1:]
+}
+
+// SslipDomain arma el dominio comodín de sslip.io para una IPv4 pública:
+// 1.2.3.4 -> 1-2-3-4.sslip.io, así *.1-2-3-4.sslip.io resuelve a 1.2.3.4.
+// Devuelve "" si ip no es una IPv4 válida.
+func SslipDomain(ip string) string {
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil || parsed.To4() == nil {
+		return ""
+	}
+	return strings.ReplaceAll(parsed.To4().String(), ".", "-") + ".sslip.io"
 }

@@ -99,6 +99,9 @@ function NewClusterForm({
   const [moduleName, setModuleName] = useState("");
   const [name, setName] = useState("");
   const [env, setEnv] = useState<ClusterEnv>("nonprod");
+  const [domain, setDomain] = useState("");
+  // k3s trae Traefik; en un cluster administrado el ingress controller lo elige el cliente.
+  const [ingressClass, setIngressClass] = useState(searchParams.get("kind") === "vm" ? "traefik" : "nginx");
   const [valuesByModule, setValuesByModule] = useState<Record<string, Record<string, string>>>({});
   const [touched, setTouched] = useState(false);
 
@@ -119,7 +122,7 @@ function NewClusterForm({
   const setValue = (field: string, v: string) =>
     setValuesByModule((cur) => ({ ...cur, [moduleKey]: { ...(cur[moduleKey] ?? initialInputValues(module?.inputs)), [field]: v } }));
 
-  const base = { cloud_account_id: account?.id ?? "", name, env };
+  const base = { cloud_account_id: account?.id ?? "", name, env, kind, domain, ingress_class: ingressClass };
   const errors = validateClusterForm(base, module?.inputs, values);
   const blocked = !runnerReady || !module || !isAdmin;
 
@@ -127,6 +130,7 @@ function NewClusterForm({
     setKind(k);
     setAccountId("");
     setModuleName("");
+    setIngressClass(k === "vm" ? "traefik" : "nginx");
     setTouched(false);
   };
 
@@ -230,6 +234,19 @@ function NewClusterForm({
                     onChange={(e) => setEnv(e.target.value as ClusterEnv)}
                   />
                 )}
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label={t("newCluster.domain")}
+                required={kind !== "vm"}
+                error={err("domain")}
+                help={kind === "vm" ? t("newCluster.domainHelpVm") : t("newCluster.domainHelpCluster")}
+              >
+                {(id) => <Input id={id} value={domain} aria-invalid={err("domain") !== undefined} placeholder="apps.dev.acme.com" onChange={(e) => setDomain(e.target.value)} />}
+              </Field>
+              <Field label={t("newCluster.ingressClass")} help={kind === "vm" ? t("newCluster.ingressHelpVm") : t("newCluster.ingressHelpCluster")}>
+                {(id) => <Input id={id} value={ingressClass} placeholder={kind === "vm" ? "traefik" : "nginx"} onChange={(e) => setIngressClass(e.target.value)} />}
               </Field>
             </div>
           </CardBody>

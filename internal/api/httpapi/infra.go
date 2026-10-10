@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"rampa.dev/internal/api/auth"
 	"regexp"
 	"strconv"
 	"strings"
@@ -71,10 +72,10 @@ func (a *API) infraRunResponse(ctx context.Context, run *store.InfraRun) (infraR
 // listInfraModules siempre responde, con runner_ready diciendo si el runner
 // puede ejecutar y runner_error con lo que falta.
 func (a *API) listInfraModules(w http.ResponseWriter, r *http.Request) {
-	resp := map[string]any{"items": infra.Modules(), "runner_ready": false}
+	resp := map[string]any{"items": infra.LocalizedModules(auth.Locale(r.Context())), "runner_ready": false}
 	switch {
 	case a.Infra == nil:
-		resp["runner_error"] = "la infraestructura con OpenTofu no está habilitada en esta instalación"
+		resp["runner_error"] = loc(r, "la infraestructura con OpenTofu no está habilitada en esta instalación", "OpenTofu infrastructure is not enabled on this server")
 	case a.Infra.Ready() != nil:
 		resp["runner_error"] = a.Infra.Ready().Error()
 	default:
@@ -84,6 +85,9 @@ func (a *API) listInfraModules(w http.ResponseWriter, r *http.Request) {
 }
 
 var clusterNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+
+// domainRe acepta un nombre DNS con al menos dos etiquetas.
+var domainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 
 // createInfraCluster crea un cluster (Kubernetes administrado o máquina con
 // k3s) con OpenTofu. module elige el módulo (default: el kind cluster del
@@ -115,20 +119,24 @@ func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	if !clusterNameRe.MatchString(body.Name) {
-		a.fail(w, r, invalid("name inválido: empieza con letra, minúsculas, números y guiones, hasta 40 caracteres"), "")
+		a.fail(w, r, invalid(loc(r, "name inválido: empieza con letra, minúsculas, números y guiones, hasta 40 caracteres", "invalid name: starts with a letter, lowercase letters, digits and hyphens, up to 40 characters")), "")
 		return
 	}
 	if body.Env != store.EnvProd && body.Env != store.EnvNonprod {
-		a.fail(w, r, invalid("env debe ser nonprod o prod"), "")
+		a.fail(w, r, invalid(loc(r, "env debe ser nonprod o prod", "env must be nonprod or prod")), "")
 		return
 	}
-	if err := requireString("cloud_account_id", body.CloudAccountID); err != nil {
+	if err := requireString(r, "cloud_account_id", body.CloudAccountID); err != nil {
 		a.fail(w, r, err, "")
 		return
 	}
+	// domain es obligatorio para un cluster administrado. Para una máquina es
+	// opcional: si viene vacío, el runner lo fija como <ip>.sslip.io al terminar,
+	// que resuelve solo y da URLs sin configurar DNS. Se valida más abajo, cuando
+	// ya se sabe el kind del módulo.
 	body.Domain = strings.TrimSpace(strings.ToLower(body.Domain))
-	if err := requireString("domain", body.Domain); err != nil {
-		a.fail(w, r, err, "")
+	if body.Domain != "" && !domainRe.MatchString(body.Domain) {
+		a.fail(w, r, invalid(loc(r, "domain inválido: usá un nombre DNS como apps.dev.acme.com", "invalid domain: use a DNS name like apps.dev.acme.com")), "")
 		return
 	}
 	if body.IngressClass == "" {
@@ -163,16 +171,20 @@ func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if acc.Status != store.CloudAccountConnected {
-		a.fail(w, r, invalid(fmt.Sprintf("la cuenta %s no está conectada (status %s); verificala primero", acc.Name, acc.Status)), "")
+		a.fail(w, r, invalid(fmt.Sprintf(loc(r, "la cuenta %s no está conectada (status %s); verificala primero", "account %s is not connected (status %s); verify it first"), acc.Name, acc.Status)), "")
 		return
 	}
 	if acc.Region == "" {
-		a.fail(w, r, invalid("la cuenta no tiene región; hacé PATCH con region antes de crear un cluster"), "")
+		a.fail(w, r, invalid(loc(r, "la cuenta no tiene región; hacé PATCH con region antes de crear un cluster", "the account has no region; PATCH it with a region before creating a cluster")), "")
 		return
 	}
 	m, err := infra.ResolveModule(acc.Provider, strings.TrimSpace(body.Module))
 	if err != nil {
 		a.fail(w, r, err, "")
+		return
+	}
+	if m.Kind == "cluster" && body.Domain == "" {
+		a.fail(w, r, invalid(loc(r, "domain es requerido para un cluster administrado: las apps se publican en <app>-<scope>.<domain>", "domain is required for a managed cluster: apps are published at <app>-<scope>.<domain>")), "")
 		return
 	}
 	typed, err := infra.ValidateInputs(m, inputs)
@@ -193,7 +205,7 @@ func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			a.fail(w, r, conflict(fmt.Sprintf("ya existe un cluster %q en la organización", body.Name)), "")
+			a.fail(w, r, conflict(fmt.Sprintf(loc(r, "ya existe un cluster %q en la organización", "a cluster named %q already exists in the organization"), body.Name)), "")
 			return
 		}
 		a.fail(w, r, err, "run de infraestructura")
@@ -216,7 +228,7 @@ func (a *API) listInfraRuns(w http.ResponseWriter, r *http.Request) {
 	if l := r.URL.Query().Get("limit"); l != "" {
 		n, err := strconv.Atoi(l)
 		if err != nil || n < 1 || n > 200 {
-			a.fail(w, r, invalid("limit debe ser un entero entre 1 y 200"), "")
+			a.fail(w, r, invalid(loc(r, "limit debe ser un entero entre 1 y 200", "limit must be an integer between 1 and 200")), "")
 			return
 		}
 		limit = n
@@ -282,9 +294,9 @@ func (a *API) requeueInfraRun(w http.ResponseWriter, r *http.Request, op func(co
 			}
 			switch what {
 			case "destroy":
-				a.fail(w, r, conflict(fmt.Sprintf("solo se puede destruir un run en succeeded o failed que no esté corriendo; este está en %s", status)), "")
+				a.fail(w, r, conflict(fmt.Sprintf(loc(r, "solo se puede destruir un run en succeeded o failed que no esté corriendo; este está en %s", "only a run in succeeded or failed that is not running can be destroyed; this one is %s"), status)), "")
 			default:
-				a.fail(w, r, conflict(fmt.Sprintf("solo se puede reintentar un run en failed; este está en %s", status)), "")
+				a.fail(w, r, conflict(fmt.Sprintf(loc(r, "solo se puede reintentar un run en failed; este está en %s", "only a failed run can be retried; this one is %s"), status)), "")
 			}
 			return
 		}

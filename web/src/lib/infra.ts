@@ -187,11 +187,17 @@ export interface ClusterFormBase {
   cloud_account_id: string;
   name: string;
   env: ClusterEnv;
+  /** cluster o vm. Con cluster el dominio es obligatorio; en vm es opcional (sin dominio, Rampa usa <ip>.sslip.io). */
+  kind?: "cluster" | "vm";
+  domain?: string;
+  ingress_class?: string;
 }
 
 export type ClusterFormErrors = Record<string, string>;
 
 const NAME_RE = /^[a-z][a-z0-9-]{0,38}[a-z0-9]$|^[a-z]$/;
+/** Nombre DNS con al menos dos etiquetas, en minúsculas. */
+export const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 export function validateClusterForm(
   base: ClusterFormBase,
@@ -202,6 +208,9 @@ export function validateClusterForm(
   if (!base.cloud_account_id) errors.cloud_account_id = i18n.t("validation.pickAccount");
   if (base.name.trim() === "") errors.name = i18n.t("validation.nameRequired");
   else if (!NAME_RE.test(base.name.trim())) errors.name = i18n.t("validation.nameFormat");
+  const domain = (base.domain ?? "").trim().toLowerCase();
+  if (domain === "" && base.kind === "cluster") errors.domain = i18n.t("validation.domainRequired");
+  else if (domain !== "" && !DOMAIN_RE.test(domain)) errors.domain = i18n.t("validation.domainFormat");
   for (const i of visibleInputs(inputs)) {
     const raw = values[i.name] ?? "";
     const kind = inputKind(i);
@@ -241,6 +250,11 @@ export function buildClusterRequest(
   if (typeof inputs.domain === "string") req.domain = inputs.domain;
   if (typeof inputs.ingress_class === "string") req.ingress_class = inputs.ingress_class;
   if (Array.isArray(inputs.admin_principal_arns)) req.admin_principal_arns = inputs.admin_principal_arns as string[];
+  // Lo que el usuario escribe en el formulario gana sobre lo derivado de los inputs.
+  const domain = (base.domain ?? "").trim().toLowerCase();
+  if (domain !== "") req.domain = domain;
+  const ingress = (base.ingress_class ?? "").trim();
+  if (ingress !== "") req.ingress_class = ingress;
   return req;
 }
 

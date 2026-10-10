@@ -562,12 +562,12 @@ func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, invalid("agent_role_arn debe ser el ARN del rol IAM del agente (arn:aws:iam::...:role/...)"), "")
 		return
 	}
-	if err := requireString("cloud_account_id", body.CloudAccountID); err != nil {
+	if err := requireString(r, "cloud_account_id", body.CloudAccountID); err != nil {
 		a.fail(w, r, err, "")
 		return
 	}
 	body.Domain = strings.TrimSpace(strings.ToLower(body.Domain))
-	if err := requireString("domain", body.Domain); err != nil {
+	if err := requireString(r, "domain", body.Domain); err != nil {
 		a.fail(w, r, err, "")
 		return
 	}

@@ -38,9 +38,26 @@ type Input struct {
 	Default  string   `json:"default,omitempty"`
 	Options  []string `json:"options,omitempty"`
 	Required bool     `json:"required"`
+	// LabelEN y HelpEN son las versiones en inglés; Localized elige.
+	LabelEN string `json:"-"`
+	HelpEN  string `json:"-"`
 
 	// check es una validación extra sobre el valor ya tipado.
 	check func(v any) error
+}
+
+// Localized devuelve una copia del input con label y help en el idioma pedido
+// ("es" por defecto, "en" si hay versión en inglés).
+func (in Input) Localized(locale string) Input {
+	if locale == "en" {
+		if in.LabelEN != "" {
+			in.Label = in.LabelEN
+		}
+		if in.HelpEN != "" {
+			in.Help = in.HelpEN
+		}
+	}
+	return in
 }
 
 // Module describe un módulo de terraform/modules/<provider>/<nombre> que el
@@ -197,12 +214,12 @@ var registry = []Module{
 	{
 		Provider: "aws", Kind: KindCluster, Module: "aws/eks-cluster", Available: true, SecretStore: "aws-secrets-manager",
 		Inputs: []Input{
-			{Name: "kubernetes_version", Label: "Versión de Kubernetes", Type: InputString, Default: DefaultKubernetesVersion, Options: KubernetesVersions, Required: true,
-				Help: "EKS Auto Mode requiere 1.29 o superior."},
-			{Name: "vpc_cidr", Label: "Rango de la VPC", Type: InputString, Default: DefaultVPCCIDR, check: checkVPCCIDR,
-				Help: "Se parte en dos subredes públicas y dos privadas. Cambialo si choca con otra red tuya."},
-			{Name: "admin_principal_arns", Label: "Identidades IAM con acceso kubectl", Type: InputList, check: checkEach("admin_principal_arns", checkIAMPrincipal),
-				Help: "ARNs de usuarios o roles de tu cuenta que van a poder administrar el cluster. Opcional."},
+			{Name: "kubernetes_version", Label: "Versión de Kubernetes", LabelEN: "Kubernetes version", Type: InputString, Default: DefaultKubernetesVersion, Options: KubernetesVersions, Required: true,
+				Help: "EKS Auto Mode requiere 1.29 o superior.", HelpEN: "EKS Auto Mode requires 1.29 or later."},
+			{Name: "vpc_cidr", Label: "Rango de la VPC", LabelEN: "VPC CIDR", Type: InputString, Default: DefaultVPCCIDR, check: checkVPCCIDR,
+				Help: "Se parte en dos subredes públicas y dos privadas. Cambialo si choca con otra red tuya.", HelpEN: "Split into two public and two private subnets. Change it if it overlaps one of your networks."},
+			{Name: "admin_principal_arns", Label: "Identidades IAM con acceso kubectl", LabelEN: "IAM identities with kubectl access", Type: InputList, check: checkEach("admin_principal_arns", checkIAMPrincipal),
+				Help: "ARNs de usuarios o roles de tu cuenta que van a poder administrar el cluster. Opcional.", HelpEN: "ARNs of users or roles in your account that will be able to administer the cluster. Optional."},
 		},
 		variables: withVariables(commonVariables("map(string)", "{}"),
 			variable{Name: "region", Type: "string"},
@@ -224,19 +241,19 @@ var registry = []Module{
 	{
 		Provider: "aws", Kind: KindVM, Module: "aws/ec2-k3s", Available: true, SecretStore: "aws-secrets-manager",
 		Inputs: []Input{
-			{Name: "instance_type", Label: "Tipo de instancia", Type: InputString, Default: "t3.small", Options: EC2InstanceTypes, Required: true,
-				Help: "t3.small (2 GB) es el mínimo razonable para k3s. t4g.* son ARM (Graviton), más baratas."},
-			{Name: "k3s_version", Label: "Versión de k3s", Type: InputString, check: checkOptionalPattern("k3s_version", k3sVersionRe, "v1.31.4+k3s1"),
-				Help: "Vacío: la última estable."},
-			{Name: "key_name", Label: "Key pair de EC2 para SSH", Type: InputString, check: checkOptionalPattern("key_name", keyNameRe, "mi-clave"),
-				Help: "Opcional. Sin clave no hay SSH; queda AWS Systems Manager."},
-			{Name: "admin_cidrs", Label: "CIDRs con acceso SSH", Type: InputList, check: checkEach("admin_cidrs", checkCIDR),
-				Help: "Rangos que pueden entrar por el puerto 22. Vacío: cerrado."},
-			{Name: "route53_zone_id", Label: "Zona de Route 53", Type: InputString, check: checkOptionalPattern("route53_zone_id", route53ZoneRe, "Z0123456789ABCDEFGHIJ"),
-				Help: "Opcional. Si la ponés, se crea el registro comodín del dominio."},
-			{Name: "tls_email", Label: "Email para Let's Encrypt", Type: InputString, check: checkOptionalPattern("tls_email", emailRe, "ops@acme.com"),
-				Help: "Opcional. Con email se instala cert-manager y los scopes salen con TLS."},
-			{Name: "volume_size_gb", Label: "Disco (GB)", Type: InputNumber, Default: "30", check: checkIntRange("volume_size_gb", 20, 1000)},
+			{Name: "instance_type", Label: "Tipo de instancia", LabelEN: "Instance type", Type: InputString, Default: "t3.small", Options: EC2InstanceTypes, Required: true,
+				Help: "t3.small (2 GB) es el mínimo razonable para k3s. t4g.* son ARM (Graviton), más baratas.", HelpEN: "t3.small (2 GB) is the reasonable minimum for k3s. t4g.* are ARM (Graviton) and cheaper."},
+			{Name: "k3s_version", Label: "Versión de k3s", LabelEN: "k3s version", Type: InputString, check: checkOptionalPattern("k3s_version", k3sVersionRe, "v1.31.4+k3s1"),
+				Help: "Vacío: la versión fija del módulo.", HelpEN: "Empty: the module's pinned version."},
+			{Name: "key_name", Label: "Key pair de EC2 para SSH", LabelEN: "EC2 key pair for SSH", Type: InputString, check: checkOptionalPattern("key_name", keyNameRe, "mi-clave"),
+				Help: "Opcional. Sin clave no hay SSH; queda AWS Systems Manager.", HelpEN: "Optional. Without a key there is no SSH; AWS Systems Manager remains."},
+			{Name: "admin_cidrs", Label: "CIDRs con acceso SSH", LabelEN: "CIDRs allowed to SSH", Type: InputList, check: checkEach("admin_cidrs", checkCIDR),
+				Help: "Rangos que pueden entrar por el puerto 22. Vacío: cerrado.", HelpEN: "Ranges that can reach port 22. Empty: closed."},
+			{Name: "route53_zone_id", Label: "Zona de Route 53", LabelEN: "Route 53 zone", Type: InputString, check: checkOptionalPattern("route53_zone_id", route53ZoneRe, "Z0123456789ABCDEFGHIJ"),
+				Help: "Opcional. Si la ponés, se crea el registro comodín del dominio.", HelpEN: "Optional. If set, the wildcard DNS record for the domain is created."},
+			{Name: "tls_email", Label: "Email para Let's Encrypt", LabelEN: "Email for Let's Encrypt", Type: InputString, check: checkOptionalPattern("tls_email", emailRe, "ops@acme.com"),
+				Help: "Opcional. Con email se instala cert-manager y los scopes salen con TLS.", HelpEN: "Optional. With an email, cert-manager is installed and scopes get TLS."},
+			{Name: "volume_size_gb", Label: "Disco (GB)", LabelEN: "Disk (GB)", Type: InputNumber, Default: "30", check: checkIntRange("volume_size_gb", 20, 1000)},
 		},
 		variables: withVariables(commonVariables("map(string)", "{}"),
 			variable{Name: "region", Type: "string"},
@@ -255,12 +272,12 @@ var registry = []Module{
 	{
 		Provider: "digitalocean", Kind: KindCluster, Module: "digitalocean/doks-cluster", Available: true, SecretStore: "kubernetes",
 		Inputs: []Input{
-			{Name: "kubernetes_version", Label: "Versión de Kubernetes", Type: InputString, check: checkOptionalPattern("kubernetes_version", doksVersionRe, "1.33.1-do.0"),
-				Help: "Slug de versión de DOKS. Vacío: la última disponible."},
-			{Name: "node_size", Label: "Tamaño de los nodos", Type: InputString, Default: "s-2vcpu-4gb", Options: DropletSizes, Required: true},
-			{Name: "node_count", Label: "Cantidad de nodos", Type: InputNumber, Default: "2", check: checkIntRange("node_count", 1, 20)},
-			{Name: "registry_name", Label: "Container Registry (DOCR)", Type: InputString, check: checkOptionalPattern("registry_name", registryNameRe, "acme"),
-				Help: "Opcional. Se crea o usa y queda integrado al cluster para pull sin credenciales."},
+			{Name: "kubernetes_version", Label: "Versión de Kubernetes", LabelEN: "Kubernetes version", Type: InputString, check: checkOptionalPattern("kubernetes_version", doksVersionRe, "1.33.1-do.0"),
+				Help: "Slug de versión de DOKS. Vacío: la última disponible.", HelpEN: "DOKS version slug. Empty: latest available."},
+			{Name: "node_size", Label: "Tamaño de los nodos", LabelEN: "Node size", Type: InputString, Default: "s-2vcpu-4gb", Options: DropletSizes, Required: true},
+			{Name: "node_count", Label: "Cantidad de nodos", LabelEN: "Node count", Type: InputNumber, Default: "2", check: checkIntRange("node_count", 1, 20)},
+			{Name: "registry_name", Label: "Container Registry (DOCR)", LabelEN: "Container Registry (DOCR)", Type: InputString, check: checkOptionalPattern("registry_name", registryNameRe, "acme"),
+				Help: "Opcional. Se crea o usa y queda integrado al cluster para pull sin credenciales.", HelpEN: "Optional. Created or reused, and integrated with the cluster for credential-less pulls."},
 		},
 		variables: withVariables(commonVariables("list(string)", "[]"),
 			variable{Name: "region", Type: "string"},
@@ -275,21 +292,21 @@ var registry = []Module{
 	{
 		Provider: "digitalocean", Kind: KindVM, Module: "digitalocean/droplet-k3s", Available: true, SecretStore: "kubernetes",
 		Inputs: []Input{
-			{Name: "size", Label: "Tamaño del Droplet", Type: InputString, Default: "s-2vcpu-2gb", Options: DropletSizes, Required: true,
-				Help: "k3s necesita al menos 2 GB."},
-			{Name: "image", Label: "Imagen", Type: InputString, Default: "ubuntu-24-04-x64", check: checkOptionalPattern("image", registryNameRe, "ubuntu-24-04-x64")},
-			{Name: "k3s_version", Label: "Versión de k3s", Type: InputString, check: checkOptionalPattern("k3s_version", k3sVersionRe, "v1.31.4+k3s1"),
-				Help: "Vacío: la última estable."},
-			{Name: "ssh_key_fingerprints", Label: "Claves SSH", Type: InputList, check: checkEach("ssh_key_fingerprints", checkSSHFingerprint),
-				Help: "Fingerprints de claves ya cargadas en DigitalOcean. Vacío: sin SSH."},
-			{Name: "admin_cidrs", Label: "CIDRs con acceso SSH", Type: InputList, check: checkEach("admin_cidrs", checkCIDR),
-				Help: "Rangos que pueden entrar por el puerto 22. Vacío: cerrado."},
-			{Name: "dns_zone", Label: "Zona DNS en DigitalOcean", Type: InputString, check: checkOptionalPattern("dns_zone", dnsNameRe, "acme.com"),
-				Help: "Opcional. Si administrás el dominio en DigitalOcean, se crea el registro comodín."},
-			{Name: "tls_email", Label: "Email para Let's Encrypt", Type: InputString, check: checkOptionalPattern("tls_email", emailRe, "ops@acme.com"),
-				Help: "Opcional. Con email se instala cert-manager y los scopes salen con TLS."},
-			{Name: "registry_name", Label: "Container Registry (DOCR)", Type: InputString, check: checkOptionalPattern("registry_name", registryNameRe, "acme"),
-				Help: "Opcional. k3s queda configurado para hacer pull de ese registry."},
+			{Name: "size", Label: "Tamaño del Droplet", LabelEN: "Droplet size", Type: InputString, Default: "s-2vcpu-2gb", Options: DropletSizes, Required: true,
+				Help: "k3s necesita al menos 2 GB.", HelpEN: "k3s needs at least 2 GB."},
+			{Name: "image", Label: "Imagen", LabelEN: "Image", Type: InputString, Default: "ubuntu-24-04-x64", check: checkOptionalPattern("image", registryNameRe, "ubuntu-24-04-x64")},
+			{Name: "k3s_version", Label: "Versión de k3s", LabelEN: "k3s version", Type: InputString, check: checkOptionalPattern("k3s_version", k3sVersionRe, "v1.31.4+k3s1"),
+				Help: "Vacío: la versión fija del módulo.", HelpEN: "Empty: the module's pinned version."},
+			{Name: "ssh_key_fingerprints", Label: "Claves SSH", LabelEN: "SSH keys", Type: InputList, check: checkEach("ssh_key_fingerprints", checkSSHFingerprint),
+				Help: "Fingerprints de claves ya cargadas en DigitalOcean. Vacío: sin SSH.", HelpEN: "Fingerprints of keys already uploaded to DigitalOcean. Empty: no SSH."},
+			{Name: "admin_cidrs", Label: "CIDRs con acceso SSH", LabelEN: "CIDRs allowed to SSH", Type: InputList, check: checkEach("admin_cidrs", checkCIDR),
+				Help: "Rangos que pueden entrar por el puerto 22. Vacío: cerrado.", HelpEN: "Ranges that can reach port 22. Empty: closed."},
+			{Name: "dns_zone", Label: "Zona DNS en DigitalOcean", LabelEN: "DNS zone in DigitalOcean", Type: InputString, check: checkOptionalPattern("dns_zone", dnsNameRe, "acme.com"),
+				Help: "Opcional. Si administrás el dominio en DigitalOcean, se crea el registro comodín.", HelpEN: "Optional. If the domain is managed in DigitalOcean, the wildcard record is created."},
+			{Name: "tls_email", Label: "Email para Let's Encrypt", LabelEN: "Email for Let's Encrypt", Type: InputString, check: checkOptionalPattern("tls_email", emailRe, "ops@acme.com"),
+				Help: "Opcional. Con email se instala cert-manager y los scopes salen con TLS.", HelpEN: "Optional. With an email, cert-manager is installed and scopes get TLS."},
+			{Name: "registry_name", Label: "Container Registry (DOCR)", LabelEN: "Container Registry (DOCR)", Type: InputString, check: checkOptionalPattern("registry_name", registryNameRe, "acme"),
+				Help: "Opcional. k3s queda configurado para hacer pull de ese registry.", HelpEN: "Optional. k3s is configured to pull from that registry."},
 		},
 		variables: withVariables(commonVariables("list(string)", "[]"),
 			variable{Name: "region", Type: "string"},
@@ -589,4 +606,24 @@ func checkIntRange(name string, min, max int) func(any) error {
 		}
 		return nil
 	}
+}
+
+// Localized devuelve una copia del módulo con sus inputs en el idioma pedido.
+func (m Module) Localized(locale string) Module {
+	out := m
+	out.Inputs = make([]Input, len(m.Inputs))
+	for i, in := range m.Inputs {
+		out.Inputs[i] = in.Localized(locale)
+	}
+	return out
+}
+
+// LocalizedModules devuelve el registro con los inputs en el idioma pedido.
+func LocalizedModules(locale string) []Module {
+	all := Modules()
+	out := make([]Module, len(all))
+	for i, m := range all {
+		out[i] = m.Localized(locale)
+	}
+	return out
 }

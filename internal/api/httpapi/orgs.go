@@ -256,7 +256,7 @@ func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
-	if err := requireString("name", body.Name); err != nil {
+	if err := requireString(r, "name", body.Name); err != nil {
 		a.fail(w, r, err, "")
 		return
 	}
