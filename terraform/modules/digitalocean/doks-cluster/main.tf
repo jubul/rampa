@@ -51,7 +51,9 @@ resource "helm_release" "rampa_agent" {
   namespace        = "rampa-system"
   create_namespace = true
   chart            = var.agent_chart_url
-  wait             = true
+  # No se espera a que el agente quede listo: depende de que llegue a la API de
+  # Rampa, y eso se ve en el estado online del cluster, no en el apply.
+  wait             = false
   timeout          = 600
 
   set = concat(

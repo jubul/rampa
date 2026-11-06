@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1015,4 +1016,36 @@ func (s *Service) localeFor(ctx context.Context, userID string) string {
 		return "es"
 	}
 	return "en"
+}
+
+// AgentReachability dice si un agente instalado en una nube va a poder
+// funcionar con esta configuración: necesita una URL pública de la API que no
+// sea local (localhost, 127.x, redes privadas) y una imagen del agente real,
+// no el placeholder. Devuelve nil si está bien, o un error con qué falta.
+// El runner sí puede usar una URL local para el estado: corre en esta máquina.
+func (s *Service) AgentReachability(locale string) error {
+	var problems []string
+	if u, err := url.Parse(s.cfg.PublicURL); err != nil || u.Hostname() == "" || isLocalHost(u.Hostname()) {
+		problems = append(problems, tr(locale,
+			fmt.Sprintf("RAMPA_PUBLIC_URL es %q: el agente corre en la nube y no puede llegar a esa dirección. Exponé la API con una URL pública (por ejemplo un túnel de cloudflared o ngrok) y reiniciá la API con RAMPA_PUBLIC_URL apuntando ahí", s.cfg.PublicURL),
+			fmt.Sprintf("RAMPA_PUBLIC_URL is %q: the agent runs in the cloud and cannot reach that address. Expose the API on a public URL (for example a cloudflared or ngrok tunnel) and restart the API with RAMPA_PUBLIC_URL pointing to it", s.cfg.PublicURL)))
+	}
+	if s.cfg.AgentImage == "" || strings.Contains(strings.ToUpper(s.cfg.AgentImage), "CHANGEME") {
+		problems = append(problems, tr(locale,
+			fmt.Sprintf("RAMPA_AGENT_IMAGE es %q, que es un placeholder: publicá la imagen del agente en un registry que el cluster pueda leer y configurala", s.cfg.AgentImage),
+			fmt.Sprintf("RAMPA_AGENT_IMAGE is %q, which is a placeholder: publish the agent image to a registry the cluster can pull from and set it", s.cfg.AgentImage)))
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(problems, ". "))
+}
+
+func isLocalHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
 }

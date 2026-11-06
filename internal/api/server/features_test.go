@@ -471,7 +471,7 @@ func TestInfraClusterFlow(t *testing.T) {
 		t.Errorf("requested_by: %v", run["requested_by"])
 	}
 	inputs, _ := run["inputs"].(map[string]any)
-	if inputs["api_url"] != "http://api.test.local" || inputs["vpc_cidr"] != "10.50.0.0/16" || inputs["agent_image_tag"] != "2.0" || inputs["kubernetes_version"] != "1.33" || inputs["agent_chart_url"] != "http://api.test.local/public/charts/rampa-agent.tgz" {
+	if inputs["api_url"] != "https://api.rampa-test.example.com" || inputs["vpc_cidr"] != "10.50.0.0/16" || inputs["agent_image_tag"] != "2.0" || inputs["kubernetes_version"] != "1.33" || inputs["agent_chart_url"] != "https://api.rampa-test.example.com/public/charts/rampa-agent.tgz" {
 		t.Errorf("inputs: %v", inputs)
 	}
 	if _, has := inputs["agent_token"]; has {

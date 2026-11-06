@@ -333,7 +333,9 @@ resource "helm_release" "rampa_agent" {
   create_namespace = true
   chart            = coalesce(var.agent_chart_oci, var.agent_chart_path, var.agent_chart_url)
   version          = var.agent_chart_oci != "" && var.agent_chart_version != "" ? var.agent_chart_version : null
-  wait             = true
+  # No se espera a que el agente quede listo: depende de que llegue a la API de
+  # Rampa, y eso se ve en el estado online del cluster, no en el apply.
+  wait             = false
   timeout          = 600
 
   set = concat(

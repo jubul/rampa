@@ -98,6 +98,12 @@ func (a *API) createInfraCluster(w http.ResponseWriter, r *http.Request) {
 	if !a.requireInfra(w) {
 		return
 	}
+	// Antes de gastar plata en la nube del cliente: el agente que se va a
+	// instalar tiene que poder bajar su imagen y llegar a esta API.
+	if err := a.Infra.AgentReachability(auth.Locale(r.Context())); err != nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", err.Error())
+		return
+	}
 	oc := orgCtx(r)
 	var body struct {
 		CloudAccountID string         `json:"cloud_account_id"`

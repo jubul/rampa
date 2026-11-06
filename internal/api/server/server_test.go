@@ -181,7 +181,7 @@ func newTestEnvWith(t *testing.T, extra map[string]string) *testEnv {
 		"RAMPA_DATABASE_URL":   dbURL,
 		"RAMPA_SESSION_SECRET": strings.Repeat("t", 40),
 		"RAMPA_DEV_LOGIN":      "true",
-		"RAMPA_PUBLIC_URL":     "http://api.test.local",
+		"RAMPA_PUBLIC_URL":     "https://api.rampa-test.example.com",
 		"RAMPA_CHART_REPO":     "oci://ghcr.io/acme/charts/rampa-agent",
 		"RAMPA_DEPLOY_TIMEOUT": "3m",
 	}
@@ -394,7 +394,7 @@ func TestFullFlow(t *testing.T) {
 		t.Fatalf("cluster: %v", cl)
 	}
 	install := str(cl, "install_command")
-	for _, want := range []string{"helm upgrade --install rampa-agent oci://ghcr.io/acme/charts/rampa-agent", "--namespace rampa-system", "--create-namespace", "--set api.url=http://api.test.local", "--set cluster.token=" + clusterToken} {
+	for _, want := range []string{"helm upgrade --install rampa-agent oci://ghcr.io/acme/charts/rampa-agent", "--namespace rampa-system", "--create-namespace", "--set api.url=https://api.rampa-test.example.com", "--set cluster.token=" + clusterToken} {
 		if !strings.Contains(install, want) {
 			t.Errorf("install_command sin %q: %s", want, install)
 		}

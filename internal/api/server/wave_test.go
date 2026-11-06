@@ -234,7 +234,7 @@ func TestBootstrapTokens(t *testing.T) {
 	// Canje sin sesión: token de cluster nuevo, el agente viejo se corta.
 	anon := env.newClient()
 	status, out := anon.do(http.MethodPost, "/v1/agent/bootstrap", map[string]string{"bootstrap_token": bootstrap})
-	if status != http.StatusOK || !strings.HasPrefix(str(out, "cluster_token"), "rampa_cluster_") || out["cluster_id"] != fx.clusterID || out["api_url"] != "http://api.test.local" {
+	if status != http.StatusOK || !strings.HasPrefix(str(out, "cluster_token"), "rampa_cluster_") || out["cluster_id"] != fx.clusterID || out["api_url"] != "https://api.rampa-test.example.com" {
 		t.Fatalf("bootstrap: %d %v", status, out)
 	}
 	newToken := str(out, "cluster_token")
